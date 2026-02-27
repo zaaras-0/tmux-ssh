@@ -7,5 +7,5 @@ if [ ! -f "$CURRENT_DIR/target/release/tmux-bw-ssh" ]; then
 fi
 
 # Mapări: Prefix + s pentru selecție, Prefix + p pentru parolă
-tmux bind-key "s" run-shell "$CURRENT_DIR/target/release/tmux-bw-ssh"
-tmux bind-key "p" run-shell "tmux send-keys \"\$(tmux show-options -pv @server_pass)\""
+tmux bind-key "S" run-shell "$CURRENT_DIR/target/release/tmux-bw-ssh"
+tmux bind-key "P" run-shell "tmux send-keys \"\$(tmux show-options -pv @server_pass)\""
