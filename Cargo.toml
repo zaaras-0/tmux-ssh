@@ -1,0 +1,8 @@
+[package]
+name = "tmux-bw-ssh"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# Permite selecția fuzzy direct din binar
+skim = "0.10"
