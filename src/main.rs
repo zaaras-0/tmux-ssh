@@ -1,71 +1,200 @@
 use skim::prelude::*;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::os::unix::process::CommandExt;
 use anyhow::{Context, Result, anyhow};
+use serde::{Deserialize, Serialize};
+use rayon::prelude::*;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RbwItem {
+    id: String,
+    name: String,
+    folder: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RbwItemFull {
+    id: String,
+    name: String,
+    folder: Option<String>,
+    organization: Option<String>,
+    notes: Option<String>,
+    data: Option<RbwItemData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RbwItemData {
+    username: Option<String>,
+    password: Option<String>,
+    uris: Option<Vec<RbwUri>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct RbwUri {
+    uri: String,
+}
 
 #[derive(Debug, Clone)]
 struct Server {
+    id: String,
     name: String,
-    folder: String,
+    group: String,
+    user: String,
+    pass: String,
+    uris: Vec<String>,
+    notes: Option<String>,
 }
 
 impl SkimItem for Server {
     fn text(&self) -> Cow<'_, str> {
-        Cow::Owned(format!("{} [{}]", self.name, self.folder))
+        Cow::Owned(format!("{} {}", self.group, self.name))
     }
 
     fn display(&self, _context: DisplayContext<'_>) -> AnsiString<'_> {
-        AnsiString::parse(&format!("\x1b[32m{}\x1b[0m \x1b[90m[{}]\x1b[0m", self.name, self.folder))
+        let group_color = if self.group == "Personal" { "\x1b[34m" } else { "\x1b[35m" };
+        AnsiString::parse(&format!("{}[{}]\x1b[0m \x1b[32m{}\x1b[0m", group_color, self.group, self.name))
     }
 
     fn output(&self) -> Cow<'_, str> {
-        Cow::Borrowed(&self.name)
+        Cow::Borrowed(&self.id)
     }
 }
 
-fn get_rbw_list() -> Result<Vec<Server>> {
+#[derive(Debug, Clone)]
+struct Snippet {
+    id: String,
+    name: String,
+    group: String,
+    notes: String,
+}
+
+impl SkimItem for Snippet {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Owned(format!("{} {}", self.group, self.name))
+    }
+
+    fn display(&self, _context: DisplayContext<'_>) -> AnsiString<'_> {
+        let group_color = if self.group == "Personal" { "\x1b[34m" } else { "\x1b[35m" };
+        AnsiString::parse(&format!("{}[{}]\x1b[0m \x1b[33m📜 {}\x1b[0m", group_color, self.group, self.name))
+    }
+}
+
+#[derive(Debug, Clone)]
+struct UriItem {
+    uri: String,
+}
+
+impl SkimItem for UriItem {
+    fn text(&self) -> Cow<'_, str> {
+        Cow::Borrowed(&self.uri)
+    }
+
+    fn display(&self, _context: DisplayContext<'_>) -> AnsiString<'_> {
+        AnsiString::parse(&format!("\x1b[36m{}\x1b[0m", self.uri))
+    }
+}
+
+fn get_rbw_items(folder_name: &str) -> Result<Vec<RbwItem>> {
     let output = Command::new("rbw")
         .arg("list")
-        .arg("--fields")
-        .arg("folder,name")
+        .arg("--raw")
         .output()
-        .context("Failed to execute rbw list")?;
+        .context("Failed to execute rbw list --raw")?;
 
     if !output.status.success() {
-        // Try to unlock if failed
-        println!("Bitwarden vault is locked. Unlocking...");
+        println!("Bitwarden vault is locked or rbw failed. Trying to unlock...");
         let unlock_status = Command::new("rbw").arg("unlock").status()?;
         if !unlock_status.success() {
             return Err(anyhow!("Failed to unlock Bitwarden vault"));
         }
-        // Retry after unlock
-        return get_rbw_list();
+        return get_rbw_items(folder_name);
     }
 
-    let s = String::from_utf8_lossy(&output.stdout);
-    let servers = s.lines()
-        .filter_map(|line| {
-            let parts: Vec<&str> = line.split('\t').collect();
-            if parts.len() >= 2 {
-                Some(Server {
-                    folder: parts[0].to_string(),
-                    name: parts[1].to_string(),
-                })
-            } else {
-                None
-            }
-        })
-        .filter(|s| s.folder == "Servers")
-        .collect();
-    
-    Ok(servers)
+    let items: Vec<RbwItem> = serde_json::from_slice(&output.stdout)
+        .context("Failed to parse rbw list output")?;
+
+    Ok(items.into_iter()
+        .filter(|item| item.folder.as_deref() == Some(folder_name))
+        .collect())
 }
 
-fn fuzzy_select(items: Vec<Server>) -> Option<Server> {
+fn get_server_details(filtered_items: Vec<RbwItem>) -> Vec<Server> {
+    filtered_items.into_par_iter()
+        .filter_map(|item| {
+            let detail_output = Command::new("rbw")
+                .arg("get")
+                .arg(&item.id)
+                .arg("--raw")
+                .output()
+                .ok()?;
+
+            if !detail_output.status.success() {
+                return None;
+            }
+
+            let full: RbwItemFull = serde_json::from_slice(&detail_output.stdout).ok()?;
+            
+            let group = full.organization.unwrap_or_else(|| "Personal".to_string());
+            let (user, pass, uris) = if let Some(d) = full.data {
+                let u = d.username.unwrap_or_default();
+                let p = d.password.unwrap_or_default();
+                let uris = d.uris.unwrap_or_default().into_iter().map(|ru| ru.uri).collect();
+                (u, p, uris)
+            } else {
+                (String::new(), String::new(), Vec::new())
+            };
+
+            Some(Server {
+                id: full.id,
+                name: full.name,
+                group,
+                user,
+                pass,
+                uris,
+                notes: full.notes,
+            })
+        })
+        .collect()
+}
+
+fn get_snippet_details(filtered_items: Vec<RbwItem>) -> Vec<Snippet> {
+    filtered_items.into_par_iter()
+        .filter_map(|item| {
+            let detail_output = Command::new("rbw")
+                .arg("get")
+                .arg(&item.id)
+                .arg("--raw")
+                .output()
+                .ok()?;
+
+            if !detail_output.status.success() {
+                return None;
+            }
+
+            let full: RbwItemFull = serde_json::from_slice(&detail_output.stdout).ok()?;
+            let notes = full.notes.unwrap_or_default();
+
+            if notes.is_empty() {
+                return None;
+            }
+
+            let group = full.organization.unwrap_or_else(|| "Personal".to_string());
+
+            Some(Snippet {
+                id: full.id,
+                name: full.name,
+                group,
+                notes,
+            })
+        })
+        .collect()
+}
+
+fn fuzzy_select<T: SkimItem + Clone + 'static>(items: Vec<T>, prompt: &str) -> Option<T> {
     let options = SkimOptionsBuilder::default()
         .height(Some("40%"))
         .reverse(true)
-        .prompt(Some("🚀 Server: "))
+        .prompt(Some(prompt))
         .color(Some("dark,fg:242,bg:236,hl:65,fg+:250,bg+:238,hl+:108,info:108,prompt:109,pointer:168,marker:168,spinner:108,header:108"))
         .build()
         .unwrap();
@@ -80,75 +209,107 @@ fn fuzzy_select(items: Vec<Server>) -> Option<Server> {
         .map(|out| out.selected_items)
         .unwrap_or_else(Vec::new);
 
-    selected_items.first().map(|item| {
-        (**item).as_any().downcast_ref::<Server>().unwrap().clone()
+    selected_items.first().and_then(|item| {
+        (**item).as_any().downcast_ref::<T>().cloned()
     })
 }
 
-fn get_server_details(name: &str) -> Result<(String, String, String)> {
-    let output = Command::new("rbw")
-        .arg("get")
-        .arg("--full")
-        .arg(name)
-        .output()
-        .context("Failed to get server details from rbw")?;
-
-    if !output.status.success() {
-        return Err(anyhow!("rbw get failed for {}", name));
-    }
-
-    let s = String::from_utf8_lossy(&output.stdout);
-    let mut password = String::new();
-    let mut username = String::new();
-    let mut uri = String::new();
-
-    let mut lines = s.lines();
-    if let Some(first_line) = lines.next() {
-        password = first_line.trim().to_string();
-    }
-
-    for line in lines {
-        if line.starts_with("Username: ") {
-            username = line.strip_prefix("Username: ").unwrap().trim().to_string();
-        } else if line.starts_with("URI: ") {
-            if uri.is_empty() {
-                uri = line.strip_prefix("URI: ").unwrap().trim().to_string();
-            }
-        }
-    }
-    
-    Ok((username, password, uri))
-}
-
-fn main() -> Result<()> {
-    let servers = get_rbw_list()?;
-    
-    if servers.is_empty() {
-        println!("❌ Error: No servers found in Bitwarden folder 'Servers'.");
-        println!("Please ensure you have items in a folder named 'Servers'.");
+fn run_snippets() -> Result<()> {
+    let items = get_rbw_items("Snippets")?;
+    if items.is_empty() {
+        println!("❌ Error: No snippets found in folder 'Snippets'.");
         std::thread::sleep(std::time::Duration::from_secs(3));
         return Ok(());
     }
 
-    let selection = match fuzzy_select(servers) {
+    let mut snippets = get_snippet_details(items);
+    
+    // Sort items: Personal first, then others alphabetically by group, then by name
+    snippets.sort_by(|a, b| {
+        if a.group == b.group {
+            a.name.cmp(&b.name)
+        } else if a.group == "Personal" {
+            std::cmp::Ordering::Less
+        } else if b.group == "Personal" {
+            std::cmp::Ordering::Greater
+        } else {
+            a.group.cmp(&b.group)
+        }
+    });
+
+    if let Some(selection) = fuzzy_select(snippets, "📜 Snippet: ") {
+        // Send integral content to the last window
+        let _ = Command::new("tmux")
+            .arg("set-buffer")
+            .arg(&selection.notes)
+            .status();
+
+        // Switch back to the last window
+        let _ = Command::new("tmux")
+            .arg("last-window")
+            .status();
+
+        // Paste and Enter
+        let _ = Command::new("tmux")
+            .arg("paste-buffer")
+            .status();
+            
+        let _ = Command::new("tmux")
+            .arg("send-keys")
+            .arg("Enter")
+            .status();
+    }
+    Ok(())
+}
+
+fn run_servers() -> Result<()> {
+    let items = get_rbw_items("Servers")?;
+    if items.is_empty() {
+        println!("❌ Error: No servers found in Bitwarden folder 'Servers'.");
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        return Ok(());
+    }
+
+    let mut servers = get_server_details(items);
+    
+    // Sort items: Personal first, then others alphabetically by group, then by name
+    servers.sort_by(|a, b| {
+        if a.group == b.group {
+            a.name.cmp(&b.name)
+        } else if a.group == "Personal" {
+            std::cmp::Ordering::Less
+        } else if b.group == "Personal" {
+            std::cmp::Ordering::Greater
+        } else {
+            a.group.cmp(&b.group)
+        }
+    });
+
+    let selection = match fuzzy_select(servers, "🚀 Server: ") {
         Some(s) => s,
         None => return Ok(()),
     };
 
-    let (user, pass, uri) = get_server_details(&selection.name)?;
-
-    if uri.is_empty() {
+    let selected_uri = if selection.uris.is_empty() {
         return Err(anyhow!("No URI found for server {}", selection.name));
-    }
+    } else if selection.uris.len() == 1 {
+        selection.uris[0].clone()
+    } else {
+        match fuzzy_select(selection.uris.into_iter().map(|u| UriItem { uri: u }).collect(), "🌐 Select IP: ") {
+            Some(u) => u.uri,
+            None => return Ok(()),
+        }
+    };
 
-    let host = uri.strip_prefix("ssh://").unwrap_or(&uri).trim();
+    let host = selected_uri.strip_prefix("ssh://").unwrap_or(&selected_uri).trim();
+    let current_pane_id = std::env::var("TMUX_PANE").context("Not running in tmux?")?;
 
     // Set the password in tmux pane-local variable
     let _ = Command::new("tmux")
         .arg("set-option")
         .arg("-p")
         .arg("@server_pass")
-        .arg(&pass)
+        .arg(&selection.pass)
         .status();
 
     // Rename the current window to the server name
@@ -157,13 +318,30 @@ fn main() -> Result<()> {
         .arg(&selection.name)
         .status();
 
-    println!("Connecting to {} as {}...", host, user);
+    // Spawn a background process to auto-insert password after a delay
+    let _ = Command::new("bash")
+        .arg("-c")
+        .arg(format!("sleep 1.5; PASS=$(tmux show-options -t {0} -pv @server_pass); [ -n \"$PASS\" ] && tmux send-keys -t {0} \"$PASS\" Enter", current_pane_id))
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn();
+
+    println!("Connecting to {} as {}...", host, selection.user);
 
     // Replace current process with ssh
     let err = Command::new("ssh")
-        .arg(format!("{}@{}", user, host))
+        .arg(format!("{}@{}", selection.user, host))
         .exec();
 
     // If exec returns, it failed
     Err(anyhow!("Failed to execute ssh: {}", err))
+}
+
+fn main() -> Result<()> {
+    let args: Vec<String> = std::env::args().collect();
+    if args.len() > 1 && args[1] == "--snippets" {
+        run_snippets()
+    } else {
+        run_servers()
+    }
 }
