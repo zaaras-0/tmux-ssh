@@ -10,5 +10,5 @@ Toate modificările aduse acestui codebase trebuie să respecte specificațiile 
 
 ## Context Execuție
 - Binarul: `target/release/tmux-bw-ssh`
-- Config Tmux: `tmux-bw-ssh.tmux`
 - Script Inserare: `scripts/insert.sh`
+- Script Instalare: `tmux-ssh-install.sh`

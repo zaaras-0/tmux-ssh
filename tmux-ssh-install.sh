@@ -7,7 +7,6 @@ NC='\033[0m' # No Color
 
 echo -e "${BLUE}Starting tmux-ssh environment setup...${NC}"
 
-# 1. Update & System Dependencies
 echo -e "Checking system updates..."
 sudo apt update -y && sudo apt install -y curl git build-essential
 
@@ -27,15 +26,24 @@ else
     echo -e "Tmuxinator is already installed."
 fi
 
-# 4. Install/Update RBW (Rust Bitwarden CLI)
+# 4. Install/Update RBW
 if ! command -v rbw &> /dev/null; then
-    echo -e "${GREEN}Installing rbw via Cargo...${NC}"
-    # Presupunem că Rust e instalat, altfel îl instalăm rapid
-    if ! command -v cargo &> /dev/null; then
-        curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
-        source $HOME/.cargo/env
-    fi
-    cargo install rbw
+    echo -e "${GREEN}Installing rbw...${NC}"
+
+    VERSION="1.15.0"
+    ARCH="amd64"
+
+    echo "Downloading rbw v$VERSION..."
+    curl -LO "https://github.com/doy/rbw/releases/download/$VERSION/rbw_${VERSION}_linux_${ARCH}.tar.gz"
+
+    echo "Extracting..."
+    tar -xzf "rbw_${VERSION}_linux_${ARCH}.tar.gz"
+
+    sudo mv rbw rbw-agent /usr/local/bin/
+    rm "rbw_${VERSION}_linux_${ARCH}.tar.gz"
+
+    echo "rbw installation complete. Version:"
+    rbw --version
 else
     echo -e "rbw is already installed."
 fi
@@ -45,8 +53,8 @@ echo -e "${BLUE}Downloading latest tmux-ssh release...${NC}"
 # Aici vom folosi GitHub API pentru a lua ultimul release
 # Exemplu de structură:
 mkdir -p ~/.local/bin
-# curl -L https://github.com/USER/tmux-ssh/releases/latest/download/tmux-ssh -o ~/.local/bin/tmux-ssh
-# chmod +x ~/.local/bin/tmux-ssh
+curl -L https://github.com/zaaras-0/tmux-ssh/archive/refs/tags/latest.zip -o ~/.local/bin/tmux-ssh
+chmod +x ~/.local/bin/tmux-ssh
 
 # 6. Setup tmux.conf
 echo -e "Configuring .tmux.conf..."
@@ -55,6 +63,6 @@ if [ -f ~/.tmux.conf ]; then
     echo "Backup created at ~/.tmux.conf.bak"
 fi
 # Luăm config-ul direct din repo-ul tău public
-# curl -s https://raw.githubusercontent.com/USER/tmux-ssh/main/.tmux.conf -o ~/.tmux.conf
+curl -s https://raw.githubusercontent.com/zaaras-0/tmux-ssh/refs/heads/main/.tmux.conf -o ~/.tmux.conf
 
 echo -e "${GREEN}Setup complete! Restart tmux to apply changes.${NC}"
