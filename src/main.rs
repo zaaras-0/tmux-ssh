@@ -95,6 +95,30 @@ impl SkimItem for UriItem {
 }
 
 fn get_rbw_items(folder_name: &str) -> Result<Vec<RbwItem>> {
+    // Check if rbw is configured by checking if an email is set
+    let config_check = Command::new("rbw")
+        .arg("config")
+        .arg("show")
+        .output()
+        .context("Failed to check rbw config")?;
+
+    let config_output = String::from_utf8_lossy(&config_check.stdout);
+    if !config_output.contains("email:") || config_output.contains("email: <not set>") {
+        println!("🚀 Bitwarden (rbw) is not configured.");
+        println!("Please enter your Bitwarden email:");
+        let mut email = String::new();
+        std::io::stdin().read_line(&mut email)?;
+        let email = email.trim();
+
+        if !email.is_empty() {
+            Command::new("rbw").arg("config").arg("set").arg("email").arg(email).status()?;
+            println!("✅ Email set to {}. Now logging in...", email);
+            Command::new("rbw").arg("login").status()?;
+        } else {
+            return Err(anyhow!("Email is required to configure rbw."));
+        }
+    }
+
     let output = Command::new("rbw")
         .arg("list")
         .arg("--raw")
@@ -102,14 +126,14 @@ fn get_rbw_items(folder_name: &str) -> Result<Vec<RbwItem>> {
         .context("Failed to execute rbw list --raw")?;
 
     if !output.status.success() {
-        println!("Bitwarden vault is locked or rbw failed. Trying to unlock...");
+        println!("🔓 Bitwarden vault is locked. Unlocking...");
         let unlock_status = Command::new("rbw").arg("unlock").status()?;
         if !unlock_status.success() {
             return Err(anyhow!("Failed to unlock Bitwarden vault"));
         }
         return get_rbw_items(folder_name);
     }
-
+...
     let items: Vec<RbwItem> = serde_json::from_slice(&output.stdout)
         .context("Failed to parse rbw list output")?;
 
@@ -238,22 +262,16 @@ fn run_snippets() -> Result<()> {
     });
 
     if let Some(selection) = fuzzy_select(snippets, "📜 Snippet: ") {
-        // Send integral content to the last window
+        // Send literal content directly to the pane
+        // -l sends keys literally, avoiding tmux parsing
         let _ = Command::new("tmux")
-            .arg("set-buffer")
+            .arg("send-keys")
+            .arg("-l")
             .arg(&selection.notes)
             .status();
 
-        // Switch back to the last window
-        let _ = Command::new("tmux")
-            .arg("last-window")
-            .status();
-
-        // Paste and Enter
-        let _ = Command::new("tmux")
-            .arg("paste-buffer")
-            .status();
-            
+        // Optional: Send Enter if you want snippets to execute immediately
+        // Usually safer to just paste, but can be configured.
         let _ = Command::new("tmux")
             .arg("send-keys")
             .arg("Enter")

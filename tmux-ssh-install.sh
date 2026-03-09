@@ -1,68 +1,104 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
-# Culori pentru output
+set -e
+
+# --- Configuration ---
+REPO_URL="https://github.com/zaaras-0/tmux-ssh"
+BINARY_NAME="tmux-bw-ssh"
+INSTALL_DIR="$HOME/.local/bin"
+SCRIPTS_DIR="$HOME/.local/share/tmux-ssh"
+TMUX_CONF="$HOME/.tmux.conf"
+
+# Colors for output
+RED='\033[0;31m'
 GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
-echo -e "${BLUE}Starting tmux-ssh environment setup...${NC}"
+echo -e "${BLUE}🚀 Starting tmux-bw-ssh Installation...${NC}"
 
-echo -e "Checking system updates..."
-sudo apt update -y && sudo apt install -y curl git build-essential
+# --- Prerequisites ---
+echo -e "${YELLOW}Checking dependencies...${NC}"
 
-# 2. Install/Update Tmux
+# Check for tmux
 if ! command -v tmux &> /dev/null; then
-    echo -e "${GREEN}Installing Tmux...${NC}"
-    sudo apt install -y tmux
-else
-    echo -e "Tmux is already installed."
+    echo "Installing tmux..."
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        sudo apt update && sudo apt install -y tmux
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        brew install tmux
+    fi
 fi
 
-# 3. Install/Update Tmuxinator (Ruby based)
-if ! command -v tmuxinator &> /dev/null; then
-    echo -e "${GREEN}Installing Tmuxinator...${NC}"
-    sudo apt install -y tmuxinator
-else
-    echo -e "Tmuxinator is already installed."
-fi
-
-# 4. Install/Update RBW
+# Check for rbw
 if ! command -v rbw &> /dev/null; then
-    echo -e "${GREEN}Installing rbw...${NC}"
+    echo -e "${YELLOW}Installing rbw (Bitwarden CLI)...${NC}"
+    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
+        # Simple download for Linux amd64 as example
+        VERSION=$(curl -s https://api.github.com/repos/doy/rbw/releases/latest | grep tag_name | cut -d '"' -f 4)
+        curl -LO "https://github.com/doy/rbw/releases/download/${VERSION}/rbw_${VERSION}_linux_amd64.tar.gz"
+        tar -xzf "rbw_${VERSION}_linux_amd64.tar.gz"
+        sudo mv rbw rbw-agent /usr/local/bin/
+        rm "rbw_${VERSION}_linux_amd64.tar.gz"
+    elif [[ "$OSTYPE" == "darwin"* ]]; then
+        brew install rbw
+    fi
+fi
 
-    VERSION="1.15.0"
-    ARCH="amd64"
+# --- Setup Directories ---
+mkdir -p "$INSTALL_DIR"
+mkdir -p "$SCRIPTS_DIR"
 
-    echo "Downloading rbw v$VERSION..."
-    curl -LO "https://github.com/doy/rbw/releases/download/$VERSION/rbw_${VERSION}_linux_${ARCH}.tar.gz"
-
-    echo "Extracting..."
-    tar -xzf "rbw_${VERSION}_linux_${ARCH}.tar.gz"
-
-    sudo mv rbw rbw-agent /usr/local/bin/
-    rm "rbw_${VERSION}_linux_${ARCH}.tar.gz"
-
-    echo "rbw installation complete. Version:"
-    rbw --version
+# --- Install Binary ---
+# Note: For development, we'll compile it. In a real 'curl | sh' scenario, 
+# we would download the pre-compiled binary from GitHub Releases.
+if [ -d "src" ] && [ -f "Cargo.toml" ]; then
+    echo -e "${YELLOW}Compiling tmux-bw-ssh from source...${NC}"
+    cargo build --release
+    cp target/release/$BINARY_NAME "$INSTALL_DIR/"
 else
-    echo -e "rbw is already installed."
+    echo -e "${YELLOW}Downloading pre-compiled binary...${NC}"
+    # Placeholder for actual download logic
+    # curl -L "$REPO_URL/releases/latest/download/$BINARY_NAME" -o "$INSTALL_DIR/$BINARY_NAME"
+    echo "No source found, and download not yet implemented for dev."
+    # For now, let's assume we are in the repo if we run this
+fi
+chmod +x "$INSTALL_DIR/$BINARY_NAME"
+
+# --- Install Scripts ---
+echo -e "${YELLOW}Installing helper scripts...${NC}"
+cat > "$INSTALL_DIR/tmux-insert-pass" << 'EOF'
+#!/usr/bin/env bash
+PASS=$(tmux show-options -pv @server_pass)
+if [ -n "$PASS" ]; then
+    tmux send-keys "$PASS" Enter
+    tmux display-message "Password injected securely 🔐"
+else
+    tmux display-message "❌ No password found for this pane (@server_pass)"
+fi
+EOF
+chmod +x "$INSTALL_DIR/tmux-insert-pass"
+
+# --- Tmux Configuration ---
+echo -e "${YELLOW}Updating .tmux.conf...${NC}"
+if ! grep -q "tmux-bw-ssh" "$TMUX_CONF" 2>/dev/null; then
+    cat >> "$TMUX_CONF" << EOF
+
+# --- tmux-bw-ssh configuration ---
+bind-key "S" new-window -n "selector" "$INSTALL_DIR/$BINARY_NAME"
+bind-key "G" display-popup -E -w 80% -h 70% "$INSTALL_DIR/$BINARY_NAME --snippets"
+bind-key -n C-p run-shell "$INSTALL_DIR/tmux-insert-pass"
+bind-key "p" run-shell "$INSTALL_DIR/tmux-insert-pass"
+EOF
+    echo -e "${GREEN}Configuration added to $TMUX_CONF${NC}"
+else
+    echo -e "Configuration already exists in $TMUX_CONF"
 fi
 
-# 5. Download tmux-ssh (Your Rust Binary)
-echo -e "${BLUE}Downloading latest tmux-ssh release...${NC}"
-# Aici vom folosi GitHub API pentru a lua ultimul release
-# Exemplu de structură:
-mkdir -p ~/.local/bin
-curl -L https://github.com/zaaras-0/tmux-ssh/archive/refs/tags/latest.zip -o ~/.local/bin/tmux-ssh
-chmod +x ~/.local/bin/tmux-ssh
-
-# 6. Setup tmux.conf
-echo -e "Configuring .tmux.conf..."
-if [ -f ~/.tmux.conf ]; then
-    mv ~/.tmux.conf ~/.tmux.conf.bak
-    echo "Backup created at ~/.tmux.conf.bak"
-fi
-# Luăm config-ul direct din repo-ul tău public
-curl -s https://raw.githubusercontent.com/zaaras-0/tmux-ssh/refs/heads/main/.tmux.conf -o ~/.tmux.conf
-
-echo -e "${GREEN}Setup complete! Restart tmux to apply changes.${NC}"
+# --- Final Steps ---
+echo -e "\n${GREEN}✅ Installation Complete!${NC}"
+echo -e "1. Run ${YELLOW}rbw config set email your@email.com${NC} if you haven't already."
+echo -e "2. Run ${YELLOW}rbw login${NC} to authenticate."
+echo -e "3. Reload tmux with ${YELLOW}tmux source-file ~/.tmux.conf${NC} or restart it."
+echo -e "\nPress ${BLUE}Prefix + S${NC} for Servers or ${BLUE}Prefix + G${NC} for Snippets."
