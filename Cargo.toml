@@ -1,12 +1,25 @@
 [package]
-name = "tmux-bw-ssh"
+name = "zbw"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-skim = "0.10"
+# Eroare și JSON
+bitwarden = "2.0.0"
+tokio = { version = "1", features = ["full"] }
 anyhow = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+
+# Interfață
+skim = "0.10"
+dialoguer = "0.11"
+console = "0.15"
+
+# Utilitare
 rayon = "1.8"
-clap = { version = "4.0", features = ["derive"] }
+dirs = "5.0"
+chrono = { version = "0.4", features = ["serde"] }
+
+# Execuție procese
+shell-words = "1.1"
