@@ -15,21 +15,43 @@ pub fn execute_snippet(client: &Client, item: CipherDetailsResponseModel) -> Res
         return Err(anyhow::anyhow!("Snippet-ul este gol."));
     }
 
-    let pane_id = std::env::var("TMUX_PANE")
-        .context("Nu ești într-o sesiune Tmux.")?;
+    // 1. Identificăm pane-ul țintă (cel de unde am venit)
+    // În tmux, dacă am rulat zbw snippets într-un split, pane-ul anterior este de obicei 'last'
+    let target_pane = if let Ok(output) = Command::new("tmux").args(["display-message", "-p", "#{last_pane_id}"]).output() {
+        let id = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if id.is_empty() { 
+            // Fallback la pane-ul curent dacă nu există 'last'
+            std::env::var("TMUX_PANE").unwrap_or_else(|_| "{last}".to_string())
+        } else {
+            id
+        }
+    } else {
+        "{last}".to_string()
+    };
 
     let name = item.name.as_deref().unwrap_or("Snippet");
-    println!("📝 Injectare snippet: {}...", name);
+    println!("📝 Injectare snippet '{}' în pane {}...", name, target_pane);
 
+    // 2. Trimitem conținutul snippet-ului
+    // Folosim -l pentru literal (nu interpretează taste speciale)
     let status = Command::new("tmux")
-        .args(["send-keys", "-t", &pane_id, "-l", &content])
+        .args(["send-keys", "-t", &target_pane, "-l", &content])
         .status()?;
 
     if status.success() {
+        // 3. Trimitem 'Enter' pentru a executa comanda
         let _ = Command::new("tmux")
-            .args(["send-keys", "-t", &pane_id, "Enter"])
+            .args(["send-keys", "-t", &target_pane, "Enter"])
             .status();
+        
         println!("✅ Snippet trimis.");
+        
+        // 4. Închidem pane-ul curent (selectorul) pentru a reveni rapid la munca noastră
+        if let Ok(current_pane) = std::env::var("TMUX_PANE") {
+            let _ = Command::new("tmux")
+                .args(["kill-pane", "-t", &current_pane])
+                .status();
+        }
     }
 
     Ok(())
