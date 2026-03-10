@@ -52,18 +52,14 @@ mkdir -p "$INSTALL_DIR"
 mkdir -p "$SCRIPTS_DIR"
 
 # --- Install Binary ---
-# Note: For development, we'll compile it. In a real 'curl | sh' scenario, 
-# we would download the pre-compiled binary from GitHub Releases.
 if [ -d "src" ] && [ -f "Cargo.toml" ]; then
     echo -e "${YELLOW}Compiling tmux-bw-ssh from source...${NC}"
     cargo build --release
     cp target/release/$BINARY_NAME "$INSTALL_DIR/"
 else
     echo -e "${YELLOW}Downloading pre-compiled binary...${NC}"
-    # Placeholder for actual download logic
     curl -L "$REPO_URL/releases/latest/download/$BINARY_NAME" -o "$INSTALL_DIR/$BINARY_NAME"
-    echo "No source found, and download not yet implemented for dev."
-    # For now, let's assume we are in the repo if we run this
+    echo "Binary downloaded."
 fi
 
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
@@ -84,9 +80,11 @@ chmod +x "$INSTALL_DIR/tmux-insert-pass"
 
 # --- Tmux Configuration ---
 read -p "Download official config? [y/n]: " choice
+
 choice=${choice:-n}
 if [[ "$choice" =~ ^[Yy]$ ]]; then
     curl -L "$RAW_REPO/refs/heads/main/.tmux.conf" -o "$TMUX_CONF"
+    echo "Config downloaded."
 fi
 
 echo -e "${YELLOW}Updating .tmux.conf...${NC}"
