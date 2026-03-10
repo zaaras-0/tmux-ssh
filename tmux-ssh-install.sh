@@ -60,10 +60,11 @@ if [ -d "src" ] && [ -f "Cargo.toml" ]; then
 else
     echo -e "${YELLOW}Downloading pre-compiled binary...${NC}"
     # Placeholder for actual download logic
-    # curl -L "$REPO_URL/releases/latest/download/$BINARY_NAME" -o "$INSTALL_DIR/$BINARY_NAME"
+    curl -L "$REPO_URL/releases/latest/download/$BINARY_NAME" -o "$INSTALL_DIR/$BINARY_NAME"
     echo "No source found, and download not yet implemented for dev."
     # For now, let's assume we are in the repo if we run this
 fi
+
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
 # --- Install Scripts ---
@@ -81,6 +82,7 @@ EOF
 chmod +x "$INSTALL_DIR/tmux-insert-pass"
 
 # --- Tmux Configuration ---
+cp ./.tmux.conf "$TMUX_CONF"
 echo -e "${YELLOW}Updating .tmux.conf...${NC}"
 if ! grep -q "tmux-bw-ssh" "$TMUX_CONF" 2>/dev/null; then
     cat >> "$TMUX_CONF" << EOF
