@@ -1505,6 +1505,7 @@ dependencies = [
  "tokio",
  "tokio-rustls",
  "tower-service",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -2460,6 +2461,7 @@ dependencies = [
  "wasm-bindgen",
  "wasm-bindgen-futures",
  "web-sys",
+ "webpki-roots",
 ]
 
 [[package]]
@@ -3690,6 +3692,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "webpki-roots"
+version = "1.0.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22cfaf3c063993ff62e73cb4311efde4db1efb31ab78a3e5c457939ad5cc0bed"
+dependencies = [
+ "rustls-pki-types",
+]
+
+[[package]]
 name = "winapi"
 version = "0.3.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4124,17 +4135,25 @@ name = "zbw"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "base64",
  "bitwarden",
+ "bitwarden-api-api",
+ "bitwarden-core",
+ "bitwarden-crypto",
+ "bitwarden-encoding",
  "chrono",
  "console",
  "dialoguer",
  "dirs",
  "rayon",
+ "reqwest",
  "serde",
  "serde_json",
  "shell-words",
  "skim",
  "tokio",
+ "uuid",
 ]
 
 [[package]]

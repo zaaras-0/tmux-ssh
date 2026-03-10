@@ -22,7 +22,7 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = Self::get_path()?;
         if !path.exists() {
-            return Err(anyhow!("Configurația lipsește. Rulați 'zbw config' sau 'zbw login'."));
+            return Err(anyhow!("Configurația lipsește. Rulați 'zbw config'."));
         }
         let content = fs::read_to_string(path)?;
         let config: Config = serde_json::from_str(&content)?;
@@ -38,22 +38,32 @@ impl Config {
     }
 
     /// Wizard-ul interactiv de configurare
-    pub fn run_wizard() -> Result<Self> {
+    pub async fn run_wizard() -> Result<Self> {
         println!("🚀 Începem configurarea zbw...");
 
-        let email = prompts::ask_input("Email Bitwarden", None)?;
-        let server_url = prompts::ask_input("Server URL", Some("https://vault.bitwarden.com".to_string()))?;
+        let email = "adq0p0@gmail.com".to_string();
+        let server_url = "https://vault.znest.ro".to_string();
 
-        // 1. Setăm serverul (acum forțează logout dacă e nevoie)
-        auth::set_bw_server(&server_url)?;
+        let final_server_url = if server_url == "https://vault.bitwarden.com" {
+            String::new() // SDK defaults to official Cloud
+        } else {
+            server_url
+        };
 
-        // 2. Login - Acesta va returna sesiunea necesară pentru pașii următori
-        // Aici utilizatorul va introduce parola și 2FA în terminal
-        let session = auth::login_wizard(&email)?;
+        // Creăm o configurație temporară pentru login
+        let mut config = Config {
+            email,
+            server_url: final_server_url,
+            personal_folder: String::new(),
+            organizations: Vec::new(),
+        };
+
+        // 2. Login
+        let client = auth::login_wizard(&config).await?;
 
         // 3. Extragere foldere folosind sesiunea proaspătă
         println!("🔍 Se încarcă folderele din Vault...");
-        let folders = vault::list_folders(&session)?; 
+        let folders = vault::list_folders(&client).await?; 
         
         if folders.is_empty() {
             return Err(anyhow::anyhow!("Nu s-au găsit foldere în acest cont. Creați unul în Bitwarden mai întâi."));
@@ -65,24 +75,28 @@ impl Config {
         // 4. Configurare Organizații (Opțional)
         let mut selected_orgs = Vec::new();
         if prompts::ask_confirm("Doriți să adăugați și iteme dintr-o Organizație?")? {
-            let orgs = vault::list_organizations(&session)?;
+            let orgs = vault::list_organizations(&client).await?;
             for org in orgs {
                 if prompts::ask_confirm(&format!("Includeți organizația '{}'?", org.name))? {
-                    // Aici am putea lista și colecțiile, dar pentru MVP includem tot din Org
+                    let collections = vault::list_collections(&client, &org.id).await?;
+                    if collections.is_empty() {
+                        println!("⚠️ Nu s-au găsit colecții în organizația '{}'.", org.name);
+                        continue;
+                    }
+
+                    let coll_names: Vec<&str> = collections.iter().map(|c| c.name.as_str()).collect();
+                    let selected_coll = prompts::select_from_list(&format!("Alege colecția din '{}'", org.name), coll_names)?;
+
                     selected_orgs.push(OrgConfig {
                         name: org.name,
-                        collections: Vec::new(), // Gol înseamnă "toate"
+                        collections: vec![selected_coll],
                     });
                 }
             }
         }
 
-        let config = Config {
-            email,
-            server_url,
-            personal_folder,
-            organizations: selected_orgs,
-        };
+        config.personal_folder = personal_folder;
+        config.organizations = selected_orgs;
 
         config.save()?;
         println!("✅ Configurare salvată cu succes!");

@@ -47,21 +47,6 @@ pub fn select_from_list(label: &str, items: Vec<&str>) -> Result<String> {
     }
 }
 
-/// Listă de selecție opțională.
-pub fn select_optional_from_list(label: &str, items: Vec<&str>) -> Result<Option<String>> {
-    if items.is_empty() {
-        return Ok(None);
-    }
-
-    let selection = Select::with_theme(&ColorfulTheme::default())
-        .with_prompt(label)
-        .items(&items)
-        .default(0)
-        .interact_on_opt(&Term::stderr())?;
-
-    Ok(selection.map(|index| items[index].to_string()))
-}
-
 /// Prompt pentru parole.
 pub fn ask_password(label: &str) -> Result<String> {
     Password::with_theme(&ColorfulTheme::default())

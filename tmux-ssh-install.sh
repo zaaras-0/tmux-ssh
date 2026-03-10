@@ -5,9 +5,8 @@ set -e
 # --- Configuration ---
 REPO_URL="https://github.com/zaaras-0/tmux-ssh"
 RAW_REPO="https://raw.githubusercontent.com/zaaras-0/tmux-ssh"
-BINARY_NAME="tmux-bw-ssh"
+BINARY_NAME="zbw"
 INSTALL_DIR="$HOME/.local/bin"
-SCRIPTS_DIR="$HOME/.local/share/tmux-ssh"
 TMUX_CONF="$HOME/.tmux.conf"
 
 # Colors for output
@@ -17,57 +16,28 @@ YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 NC='\033[0m'
 
-echo -e "${BLUE}🚀 Starting tmux-bw-ssh Installation...${NC}"
-
-# --- Prerequisites ---
-echo -e "${YELLOW}Checking dependencies...${NC}"
-
-# Check for tmux
-if ! command -v tmux &> /dev/null; then
-    echo "Installing tmux..."
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        sudo apt update && sudo apt install -y tmux
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        brew install tmux
-    fi
-fi
-
-# Check for rbw
-if ! command -v rbw &> /dev/null; then
-    echo -e "${YELLOW}Installing rbw (Bitwarden CLI)...${NC}"
-    if [[ "$OSTYPE" == "linux-gnu"* ]]; then
-        # Simple download for Linux amd64 as example
-        VERSION=$(curl -s https://api.github.com/repos/doy/rbw/releases/latest | grep tag_name | cut -d '"' -f 4)
-        curl -LO "https://github.com/doy/rbw/releases/download/${VERSION}/rbw_${VERSION}_linux_amd64.tar.gz"
-        tar -xzf "rbw_${VERSION}_linux_amd64.tar.gz"
-        sudo mv rbw rbw-agent /usr/local/bin/
-        rm "rbw_${VERSION}_linux_amd64.tar.gz"
-    elif [[ "$OSTYPE" == "darwin"* ]]; then
-        brew install rbw
-    fi
-fi
+echo -e "${BLUE}🚀 Starting zbw (tmux-bw-ssh) Installation...${NC}"
 
 # --- Setup Directories ---
 mkdir -p "$INSTALL_DIR"
-mkdir -p "$SCRIPTS_DIR"
 
 # --- Install Binary ---
 if [ -d "src" ] && [ -f "Cargo.toml" ]; then
-    echo -e "${YELLOW}Compiling tmux-bw-ssh from source...${NC}"
+    echo -e "${YELLOW}Compiling zbw from source...${NC}"
     cargo build --release
     cp target/release/$BINARY_NAME "$INSTALL_DIR/"
 else
-    echo -e "${YELLOW}Downloading pre-compiled binary...${NC}"
-    curl -L "$REPO_URL/releases/latest/download/$BINARY_NAME" -o "$INSTALL_DIR/$BINARY_NAME"
-    echo "Binary downloaded."
+    echo -e "${RED}Error: Source directory not found. Please run this script from the repository root.${NC}"
+    exit 1
 fi
 
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
-# --- Install Scripts ---
+# --- Install Helper Scripts ---
 echo -e "${YELLOW}Installing helper scripts...${NC}"
 cat > "$INSTALL_DIR/tmux-insert-pass" << 'EOF'
 #!/usr/bin/env bash
+# Injectează parola salvată în buffer-ul pane-ului curent
 PASS=$(tmux show-options -pv @server_pass)
 if [ -n "$PASS" ]; then
     tmux send-keys "$PASS" Enter
@@ -79,32 +49,28 @@ EOF
 chmod +x "$INSTALL_DIR/tmux-insert-pass"
 
 # --- Tmux Configuration ---
-read -p "Download official config? [y/n]: " choice
-
-choice=${choice:-n}
-if [[ "$choice" =~ ^[Yy]$ ]]; then
-    curl -L "$RAW_REPO/refs/heads/main/.tmux.conf" -o "$TMUX_CONF"
-    echo "Config downloaded."
-fi
-
 echo -e "${YELLOW}Updating .tmux.conf...${NC}"
-if ! grep -q "tmux-bw-ssh" "$TMUX_CONF" 2>/dev/null; then
+if ! grep -q "$BINARY_NAME" "$TMUX_CONF" 2>/dev/null; then
     cat >> "$TMUX_CONF" << EOF
 
-# --- tmux-bw-ssh configuration ---
-bind-key "S" new-window -n "selector" "$INSTALL_DIR/$BINARY_NAME"
-bind-key "G" display-popup -E -w 80% -h 70% "$INSTALL_DIR/$BINARY_NAME --snippets"
+# --- zbw (Bitwarden SSH) configuration ---
+bind-key "S" new-window -n "selector" "$INSTALL_DIR/$BINARY_NAME list"
+bind-key "G" new-window -n "snippets" "$INSTALL_DIR/$BINARY_NAME snippets"
+bind-key "/" command-prompt -p "Search Vault:" "new-window -n 'search' '$INSTALL_DIR/$BINARY_NAME search \"%%\"'"
 bind-key -n C-p run-shell "$INSTALL_DIR/tmux-insert-pass"
 bind-key "p" run-shell "$INSTALL_DIR/tmux-insert-pass"
 EOF
-    echo -e "${GREEN}Configuration added to $TMUX_CONF${NC}"
+    echo -e "${GREEN}Keybindings added to $TMUX_CONF${NC}"
 else
     echo -e "Configuration already exists in $TMUX_CONF"
 fi
 
 # --- Final Steps ---
 echo -e "\n${GREEN}✅ Installation Complete!${NC}"
-echo -e "1. Run ${YELLOW}rbw config set email your@email.com${NC} if you haven't already."
-echo -e "2. Run ${YELLOW}rbw login${NC} to authenticate."
-echo -e "3. Reload tmux with ${YELLOW}tmux source-file ~/.tmux.conf${NC} or restart it."
-echo -e "\nPress ${BLUE}Prefix + S${NC} for Servers or ${BLUE}Prefix + G${NC} for Snippets."
+echo -e "1. Run ${YELLOW}$BINARY_NAME config${NC} to set up your vault."
+echo -e "2. Reload tmux with ${YELLOW}tmux source-file ~/.tmux.conf${NC}"
+echo -e "\nKeybindings:"
+echo -e "  - ${BLUE}Prefix + S${NC}: List Servers"
+echo -e "  - ${BLUE}Prefix + G${NC}: List Snippets"
+echo -e "  - ${BLUE}Prefix + /${NC}: Search Vault"
+echo -e "  - ${BLUE}Ctrl + P${NC} (or Prefix+p): Inject Password"
