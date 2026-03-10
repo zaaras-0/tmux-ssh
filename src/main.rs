@@ -12,6 +12,8 @@ struct RbwItem {
     id: String,
     name: String,
     folder: Option<String>,
+    #[serde(default)]
+    collections: Vec<String>, // Adăugăm asta pentru organizații
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -177,11 +179,28 @@ fn run_servers() -> Result<()> {
 
 // --- Helpers ---
 
-fn get_rbw_items(folder: &str) -> Result<Vec<RbwItem>> {
+fn get_rbw_items(target_name: &str) -> Result<Vec<RbwItem>> {
     ensure_rbw_ready()?;
-    let output = Command::new("rbw").args(["list", "--raw"]).output()?;
-    let items: Vec<RbwItem> = serde_json::from_slice(&output.stdout)?;
-    Ok(items.into_iter().filter(|i| i.folder.as_deref() == Some(folder)).collect())
+
+    let output = Command::new("rbw")
+        .args(["list", "--raw"])
+        .output()
+        .context("Failed to execute rbw list")?;
+
+    let items: Vec<RbwItem> = serde_json::from_slice(&output.stdout)
+        .context("Failed to parse rbw list output")?;
+
+    Ok(items.into_iter()
+        .filter(|item| {
+            // Cazul 1: Este în folderul personal cu numele respectiv
+            let in_folder = item.folder.as_deref() == Some(target_name);
+            
+            // Cazul 2: Este într-o colecție de organizație cu numele respectiv
+            let in_collection = item.collections.iter().any(|c| c == target_name);
+
+            in_folder || in_collection
+        })
+        .collect())
 }
 
 fn get_server_details(items: Vec<RbwItem>) -> Vec<Server> {
