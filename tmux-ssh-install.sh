@@ -4,6 +4,7 @@ set -e
 
 # --- Configuration ---
 REPO_URL="https://github.com/zaaras-0/tmux-ssh"
+RAW_REPO="https://raw.githubusercontent.com/zaaras-0/tmux-ssh"
 BINARY_NAME="tmux-bw-ssh"
 INSTALL_DIR="$HOME/.local/bin"
 SCRIPTS_DIR="$HOME/.local/share/tmux-ssh"
@@ -82,7 +83,12 @@ EOF
 chmod +x "$INSTALL_DIR/tmux-insert-pass"
 
 # --- Tmux Configuration ---
-cp ./.tmux.conf "$TMUX_CONF"
+read -p "Download official config? [y/n]: " choice
+choice=${choice:-n}
+if [[ "$choice" =~ ^[Yy]$ ]]; then
+    curl -L "$RAW_REPO/refs/heads/main/.tmux.conf" -o "$TMUX_CONF"
+fi
+
 echo -e "${YELLOW}Updating .tmux.conf...${NC}"
 if ! grep -q "tmux-bw-ssh" "$TMUX_CONF" 2>/dev/null; then
     cat >> "$TMUX_CONF" << EOF
