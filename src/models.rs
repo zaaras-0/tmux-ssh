@@ -7,6 +7,7 @@ pub struct Config {
     pub email: String,
     pub server_url: String,
     pub personal_folder: String,
+    pub personal_snippets_folder: String,
     pub organizations: Vec<OrgConfig>,
 }
 
@@ -35,4 +36,40 @@ pub struct BwCollection {
     pub id: String,
     pub name: String,
     pub organization_id: String,
+}
+
+// --- Modele pentru Sync ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BwCipher {
+    pub id: String,
+    pub organization_id: Option<String>,
+    pub folder_id: Option<String>,
+    pub r#type: i32,
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub notes: Option<String>,
+    #[serde(default)]
+    pub login: Option<BwCipherLogin>,
+    #[serde(default)]
+    pub collection_ids: Option<Vec<String>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BwCipherLogin {
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub uris: Option<Vec<BwCipherUri>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BwCipherUri {
+    pub uri: Option<String>,
 }

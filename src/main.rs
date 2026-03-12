@@ -73,6 +73,11 @@ async fn main() -> Result<()> {
         "snip" | "snippets" => {
             run_list_flow(&config, true, None).await?;
         },
+        "_connect" => {
+            let id = args.get(2).context("Lipsă ID item")?;
+            let ip = args.get(3).cloned();
+            ssh::execute_ssh_internal(&config, id, ip).await?;
+        },
         _ => {
             println!("Comandă necunoscută: {}. Utilizați: list, search, ssh, snippets, config, login, lock, purge, status.", command);
         }
@@ -85,8 +90,15 @@ async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>)
     let mut client = auth::get_client(config).await?;
     
     println!("🔍 Se încarcă datele din Vault...");
-    let items = vault::fetch_filtered_items(config, &mut client).await?;
+    let mut items = vault::fetch_filtered_items(config, &mut client, is_snippet).await?;
     
+    // Sort items alphabetically by name
+    items.sort_by(|a, b| {
+        let name_a = a.name.as_deref().unwrap_or("");
+        let name_b = b.name.as_deref().unwrap_or("");
+        name_a.to_lowercase().cmp(&name_b.to_lowercase())
+    });
+
     if items.is_empty() {
         println!("⚠️ Nu s-au găsit iteme în locațiile configurate.");
         return Ok(());
@@ -104,7 +116,12 @@ async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>)
     }
 
     let mut builder = SkimOptionsBuilder::default();
-    builder.height(Some("40%")).multi(false);
+    builder
+        .height(Some("60%"))
+        .margin(Some("2,4,2,4"))
+        .multi(false)
+        .header(Some(if is_snippet { "Selectează Snippet" } else { "Selectează Server SSH" }))
+        .prompt(Some("🔎 > "));
     
     let query_str = query.clone().unwrap_or_default();
     if query.is_some() {
@@ -137,7 +154,54 @@ async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>)
         if is_snippet {
             snippets::execute_snippet(&client, chosen_item)?;
         } else {
-            ssh::execute_ssh(&client, chosen_item)?;
+            // Verificăm dacă avem mai multe URI-uri
+            let uris = chosen_item.login.as_ref()
+                .and_then(|l| l.uris.as_ref())
+                .cloned()
+                .unwrap_or_default();
+            
+            let mut decrypted_uris = Vec::new();
+            for u in uris {
+                if let Some(enc_uri) = u.uri {
+                    if let Ok(dec_uri) = vault::decrypt_string(&client, &enc_uri, chosen_item.organization_id.as_deref()) {
+                        decrypted_uris.push(dec_uri);
+                    }
+                }
+            }
+
+            let selected_ip = if decrypted_uris.len() > 1 {
+                // Afișăm un sub-selector pentru IP
+                let mut uri_input = String::new();
+                for u in &decrypted_uris {
+                    uri_input.push_str(&format!("{}\n", u));
+                }
+
+                let mut sub_builder = SkimOptionsBuilder::default();
+                sub_builder
+                    .height(Some("40%"))
+                    .margin(Some("2,8,2,8"))
+                    .header(Some("Selectează IP/Host"))
+                    .prompt(Some("🌐 > "));
+                
+                let sub_options = sub_builder.build().unwrap();
+                let sub_reader = SkimItemReader::default();
+                let sub_stream = sub_reader.of_bufread(std::io::Cursor::new(uri_input));
+
+                if let Some(sub_out) = Skim::run_with(&sub_options, Some(sub_stream)) {
+                    if sub_out.is_abort {
+                        return Ok(());
+                    }
+                    Some(sub_out.selected_items.get(0)
+                        .map(|i| i.output().to_string())
+                        .context("Nu s-a selectat niciun URI")?)
+                } else {
+                    return Ok(());
+                }
+            } else {
+                decrypted_uris.first().cloned()
+            };
+
+            ssh::spawn_ssh_window(&chosen_item, selected_ip)?;
         }
     }
 

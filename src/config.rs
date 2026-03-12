@@ -40,28 +40,34 @@ impl Config {
     /// Wizard-ul interactiv de configurare
     pub async fn run_wizard() -> Result<Self> {
         println!("🚀 Începem configurarea zbw...");
+        
+        let existing_config = Self::load().ok();
 
-        let email = "adq0p0@gmail.com".to_string();
-        let server_url = "https://vault.znest.ro".to_string();
+        // 1. Identitate (Folosim valorile din config dacă există)
+        let default_email = existing_config.as_ref().map(|c| c.email.as_str()).unwrap_or("adq0p0@gmail.com");
+        let default_server = existing_config.as_ref().map(|c| c.server_url.as_str()).unwrap_or("https://vault.znest.ro");
+
+        let email = prompts::ask_input("Email Bitwarden", Some(default_email.to_string()))?;
+        let server_url = prompts::ask_input("Server URL (Vaultwarden)", Some(default_server.to_string()))?;
 
         let final_server_url = if server_url == "https://vault.bitwarden.com" {
-            String::new() // SDK defaults to official Cloud
+            String::new() 
         } else {
-            server_url
+            server_url.clone()
         };
 
-        // Creăm o configurație temporară pentru login
         let mut config = Config {
-            email,
+            email: email.clone(),
             server_url: final_server_url,
             personal_folder: String::new(),
+            personal_snippets_folder: String::new(),
             organizations: Vec::new(),
         };
 
         // 2. Login
         let client = auth::login_wizard(&config).await?;
 
-        // 3. Extragere foldere folosind sesiunea proaspătă
+        // 3. Extragere foldere pentru Personal (Servers & Snippets)
         println!("🔍 Se încarcă folderele din Vault...");
         let folders = vault::list_folders(&client).await?; 
         
@@ -70,7 +76,22 @@ impl Config {
         }
 
         let folder_names: Vec<&str> = folders.iter().map(|f| f.name.as_str()).collect();
-        let personal_folder = prompts::select_from_list("Alege folderul Personal pentru SSH/Snippets", folder_names)?;
+        
+        // Defaults pentru foldere
+        let default_srv_folder = existing_config.as_ref()
+            .map(|c| c.personal_folder.as_str())
+            .unwrap_or_else(|| {
+                if folder_names.contains(&"Servers") { "Servers" } else { folder_names[0] }
+            });
+            
+        let default_snip_folder = existing_config.as_ref()
+            .map(|c| c.personal_snippets_folder.as_str())
+            .unwrap_or_else(|| {
+                if folder_names.contains(&"Snippets") { "Snippets" } else { folder_names[0] }
+            });
+
+        let personal_folder = prompts::select_from_list_with_default("Alege folderul Personal pentru SERVERE", folder_names.clone(), default_srv_folder)?;
+        let personal_snippets_folder = prompts::select_from_list_with_default("Alege folderul Personal pentru SNIPPETS", folder_names, default_snip_folder)?;
 
         // 4. Configurare Organizații (Opțional)
         let mut selected_orgs = Vec::new();
@@ -85,7 +106,7 @@ impl Config {
                     }
 
                     let coll_names: Vec<&str> = collections.iter().map(|c| c.name.as_str()).collect();
-                    let selected_coll = prompts::select_from_list(&format!("Alege colecția din '{}'", org.name), coll_names)?;
+                    let selected_coll = prompts::select_from_list("Alege colecția dorită", coll_names)?;
 
                     selected_orgs.push(OrgConfig {
                         name: org.name,
@@ -96,6 +117,7 @@ impl Config {
         }
 
         config.personal_folder = personal_folder;
+        config.personal_snippets_folder = personal_snippets_folder;
         config.organizations = selected_orgs;
 
         config.save()?;
