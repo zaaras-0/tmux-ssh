@@ -73,6 +73,9 @@ async fn main() -> Result<()> {
         "snip" | "snippets" => {
             run_list_flow(&config, true, None).await?;
         },
+        "pass" => {
+            ssh::inject_password_from_tmux()?;
+        },
         "_connect" => {
             let id = args.get(2).context("Lipsă ID item")?;
             let ip = args.get(3).cloned();

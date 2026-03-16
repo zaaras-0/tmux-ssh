@@ -28,36 +28,28 @@ fi
 
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
-# --- Install Helper Scripts ---
-echo -e "${YELLOW}Installing helper scripts...${NC}"
-cat > "$INSTALL_DIR/tmux-insert-pass" << 'EOF'
-#!/usr/bin/env bash
-PASS=$(tmux show-options -pv @server_pass)
-if [ -n "$PASS" ]; then
-    tmux send-keys "$PASS" Enter
-    tmux display-message "Password injected securely 🔐"
-else
-    tmux display-message "❌ No password found for this pane (@server_pass)"
-fi
-EOF
-chmod +x "$INSTALL_DIR/tmux-insert-pass"
-
 # --- Tmux Configuration ---
 echo -e "${YELLOW}Updating .tmux.conf...${NC}"
-# Curățăm vechile configurări pentru a evita dublurile
-sed -i '/# --- zbw/,+10d' "$TMUX_CONF" 2>/dev/null || true
+# Curățăm vechile configurări pentru a evita dublurile (zbw)
+sed -i '/# --- zbw/,+12d' "$TMUX_CONF" 2>/dev/null || true
 
 cat >> "$TMUX_CONF" << EOF
 
 # --- zbw (Bitwarden SSH) configuration ---
-bind-key s new-window -n "selector" "$INSTALL_DIR/$BINARY_NAME"
-bind-key S new-window -n "selector" "$INSTALL_DIR/$BINARY_NAME"
-bind-key g split-window -v -p 30 "$INSTALL_DIR/$BINARY_NAME snippets"
-bind-key G split-window -v -p 30 "$INSTALL_DIR/$BINARY_NAME snippets"
-bind-key "/" command-prompt -p "Search Vault:" "split-window -v -p 30 '$INSTALL_DIR/$BINARY_NAME search \"%%\"'"
-bind-key -n C-p run-shell "$INSTALL_DIR/tmux-insert-pass"
-bind-key p run-shell "$INSTALL_DIR/tmux-insert-pass"
+bind-key s display-popup -E -w 80% -h 65% "$INSTALL_DIR/$BINARY_NAME"
+bind-key S display-popup -E -w 80% -h 65% "$INSTALL_DIR/$BINARY_NAME"
+bind-key g display-popup -E -w 80% -h 65% "$INSTALL_DIR/$BINARY_NAME snippets"
+bind-key G display-popup -E -w 80% -h 65% "$INSTALL_DIR/$BINARY_NAME snippets"
+bind-key "/" command-prompt -p "Search Vault:" "display-popup -E -w 80% -h 65% '$INSTALL_DIR/$BINARY_NAME search \"%%\"'"
+bind-key -n C-p run-shell "$INSTALL_DIR/$BINARY_NAME pass"
+bind-key p run-shell "$INSTALL_DIR/$BINARY_NAME pass"
 EOF
+
+# --- Cleanup ---
+if [ -d "target" ]; then
+    echo -e "${YELLOW}Cleaning up build files...${NC}"
+    rm -rf "target"
+fi
 
 # --- Final Steps ---
 echo -e "\n${GREEN}✅ Installation Complete!${NC}"

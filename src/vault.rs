@@ -52,7 +52,13 @@ pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snip
     for org_conf in &_config.organizations {
         if let Some(org) = orgs.iter().find(|o| o.name == org_conf.name) {
             let all_collections = list_collections_from_sync(&sync_data, client, &org.id).await?;
-            for sc in &org_conf.collections {
+            let collections_to_check = if is_snippet {
+                &org_conf.snippets_collections
+            } else {
+                &org_conf.collections
+            };
+
+            for sc in collections_to_check {
                 if let Some(c) = all_collections.iter().find(|coll| &coll.name == sc) {
                     selected_collection_ids.push(c.id.clone());
                 }
@@ -64,6 +70,10 @@ pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snip
     ciphers.retain(|c| {
         let is_login = c.r#type == 1;
         let is_note = c.r#type == 2;
+
+        // Dacă e snippet, vrem doar Secure Notes. Dacă e SSH, vrem doar Logins.
+        if is_snippet && !is_note { return false; }
+        if !is_snippet && !is_login { return false; }
 
         let in_personal_folder = if let Some(fid) = personal_folder_id.as_ref() {
             c.folder_id.as_ref() == Some(fid)
@@ -77,7 +87,7 @@ pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snip
             false
         };
 
-        (is_login || is_note) && (in_personal_folder || in_selected_collection)
+        in_personal_folder || in_selected_collection
     });
 
     // Decriptăm numele pentru a putea fi citite în listă

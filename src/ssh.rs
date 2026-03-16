@@ -3,9 +3,40 @@ use std::os::unix::process::CommandExt;
 use std::thread;
 use std::time::Duration;
 use anyhow::{Result, Context, anyhow};
-use bitwarden_core::Client;
 use crate::vault::decrypt_string;
 use crate::models::{BwCipher, Config};
+
+/// Citeste parola din optiunile tmux ale pane-ului curent si o injectează
+pub fn inject_password_from_tmux() -> Result<()> {
+    // 1. Obținem ID-ul pane-ului curent
+    let pane_id = std::env::var("TMUX_PANE")
+        .context("Comanda 'pass' trebuie rulată dintr-o sesiune tmux")?;
+
+    // 2. Citim parola din variabila pane-ului (@server_pass)
+    let output = Command::new("tmux")
+        .args(["show-options", "-pv", "-t", &pane_id, "@server_pass"])
+        .output()?;
+
+    let password = String::from_utf8_lossy(&output.stdout).trim().to_string();
+
+    if password.is_empty() {
+        let _ = Command::new("tmux")
+            .args(["display-message", "-t", &pane_id, "❌ No password found for this pane (@server_pass)"])
+            .status();
+        return Ok(());
+    }
+
+    // 3. Trimitem parola
+    let _ = Command::new("tmux")
+        .args(["send-keys", "-t", &pane_id, &password, "Enter"])
+        .status();
+
+    let _ = Command::new("tmux")
+        .args(["display-message", "-t", &pane_id, "Password injected securely 🔐"])
+        .status();
+
+    Ok(())
+}
 
 /// Deschide o fereastră nouă de tmux care va rula comanda de conectare internă
 pub fn spawn_ssh_window(item: &BwCipher, selected_uri: Option<String>) -> Result<()> {

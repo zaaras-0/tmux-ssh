@@ -15,6 +15,7 @@ pub struct Config {
 pub struct OrgConfig {
     pub name: String,
     pub collections: Vec<String>,
+    pub snippets_collections: Vec<String>,
 }
 
 // --- Structuri Helper pentru Skim/UI ---

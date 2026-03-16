@@ -106,11 +106,13 @@ impl Config {
                     }
 
                     let coll_names: Vec<&str> = collections.iter().map(|c| c.name.as_str()).collect();
-                    let selected_coll = prompts::select_from_list("Alege colecția dorită", coll_names)?;
+                    let selected_coll = prompts::select_from_list("Alege colecția pentru SERVERE", coll_names.clone())?;
+                    let selected_snip_coll = prompts::select_from_list("Alege colecția pentru SNIPPETS", coll_names)?;
 
                     selected_orgs.push(OrgConfig {
                         name: org.name,
                         collections: vec![selected_coll],
+                        snippets_collections: vec![selected_snip_coll],
                     });
                 }
             }
