@@ -1,35 +1,35 @@
-# Parcursul Ideal: tmux-bw-ssh
+# IDEAL PATH - zbw (tmux-bw-ssh)
 
-Acest document definește arhitectura și fluxul logic al instrumentului, bazat pe principiile securității prin izolare și vitezei de execuție.
+Acest document reflectă starea curentă a proiectului și deciziile arhitecturale luate pentru a asigura stabilitatea și compatibilitatea Bitwarden/Vaultwarden.
 
-## Principiile de Bază
-1. **Securitate prin Izolare:** Secretele nu ating niciodată clipboard-ul global. Sunt stocate în memoria procesului `tmux` (variabile de panou).
-2. **Viteză (rbw):** Utilizarea `rbw` (Rust Bitwarden) pentru acces instantaneu prin agentul de autentificare.
-3. **Interfață Fuzzy:** Selecție rapidă a serverelor folosind `skim`.
+## 🏗️ Arhitectură Core
+- **Limbaj:** Rust (Async cu `tokio`).
+- **SDK:** Utilizare directă a `bitwarden-sdk` (crate-urile `core`, `api-api`, `crypto`, `encoding`).
+- **Zero Binary Dependency:** Nu mai depindem de `bw` sau `rbw`. Totul este compilat în binarul `zbw`.
 
-## Fluxul Logic (Arhitectura)
+## 🔐 Securitate și Criptografie
+- **Sesiune:** Salvată în `/dev/shm/zbw.session.json` (doar în RAM).
+- **Manual Auth Flow:** Implementat manual `Prelogin` -> `MasterKey` -> `PasswordHash` -> `Identity Token` pentru compatibilitate cu Vaultwarden (evitând endpoint-urile `/password` noi din SDK).
+- **Decriptare Hibridă:**
+    - **User Key:** Decriptată cu `MasterKey`.
+    - **Private Key:** Decriptată cu `UserKey`.
+    - **Org Keys:** Decriptate asimetric (RSA) folosind `PrivateKey` sau simetric folosind `UserKey`.
+- **Data Source:** Se folosește exclusiv endpoint-ul `/api/sync` pentru a prelua iteme, foldere, organizații și colecții într-un singur apel stabil.
 
-### 1. Sursa de Adevăr (Bitwarden / rbw)
-- Folosește `rbw` pentru viteză nativă.
-- Presupune existența unui folder numit `Servers` în Bitwarden.
-- Agentul `rbw` păstrează master password-ul în RAM (criptat).
+## ⌨️ Integrare Tmux
+- **Servers (S/s):** `new-window` pentru un terminal SSH dedicat.
+- **Snippets (G/g):** `split-window` jos (30%). Injectează în `last_pane_id` și face auto-kill la pane-ul de selecție.
+- **Search (/):** `split-window` cu prompt de căutare interactiv în bara de status.
+- **Password Completion:** Parola este salvată în variabila de pane `@server_pass`. Poate fi re-injectată cu `Ctrl + P` (fără prefix) sau `Prefix + p`.
 
-### 2. Selecția (Skim)
-- Binarul Rust injectează lista de servere din folderul `Servers` în `skim`.
-- UI-ul este limitat la 40% din înălțimea terminalului, poziționat inversat pentru vizibilitate.
+## 🚀 Direcții Viitoare
+- [ ] Implementare suport 2FA în fluxul manual.
+- [ ] Sistem de caching criptat pentru datele de sync (pornire instantanee offline-first).
+- [ ] Selectare IP multiplu pentru un singur item Bitwarden.
+- [ ] Comandă `zbw add` pentru a adăuga servere noi direct din CLI.
 
-### 3. Conexiune și Metadate
-- La selecție, binarul:
-    - Setează variabila `@server_pass` în panoul curent (pane-local).
-    - Redenumește fereastra `tmux` după numele serverului.
-    - Execută `ssh` înlocuind procesul curent (`exec`).
-
-### 4. Autentificare "La Cerere"
-- **Keybind:** `Prefix + p`
-- Execută un script (`insert.sh`) care citește `@server_pass` și o trimite prin `send-keys` direct în fluxul standard al panoului.
-
-### 5. Securitate Post-Sesiune
-- Metadatele (`@server_pass`) sunt legate de ID-ul panoului. La închiderea panoului/sesiunii, secretul este distrus automat de către `tmux`.
-
----
-*Acest document servește drept specificație tehnică obligatorie pentru dezvoltarea `tmux-bw-ssh`.*
+## 🛠️ Mentenanță
+- **Build:** `cargo build --release`.
+- **Install:** `bash tmux-ssh-install.sh`.
+- **Reset Config:** `zbw purge`.
+- **Lock Vault:** `zbw lock`.
