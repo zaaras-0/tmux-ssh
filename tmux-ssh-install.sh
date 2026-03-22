@@ -19,6 +19,24 @@ echo -e "${BLUE}🚀 Starting zbw Installation...${NC}"
 # --- Setup Directories ---
 mkdir -p "$INSTALL_DIR"
 
+# --- Add to PATH ---
+SHELL_RC_FILES=("$HOME/.bashrc" "$HOME/.zshrc")
+PATH_ADDED=false
+
+for RC_FILE in "${SHELL_RC_FILES[@]}"; do
+    if [ -f "$RC_FILE" ]; then
+        if ! grep -q "$INSTALL_DIR" "$RC_FILE"; then
+            echo -e "${YELLOW}Adding $INSTALL_DIR to PATH in $RC_FILE...${NC}"
+            echo -e "\n# --- zbw (Bitwarden SSH) PATH ---\nexport PATH=\"\$PATH:$INSTALL_DIR\"" >> "$RC_FILE"
+            PATH_ADDED=true
+        fi
+    fi
+done
+
+if [ "$PATH_ADDED" = true ]; then
+    echo -e "${YELLOW}⚠️  PATH updated! Please restart your terminal or run: ${BLUE}source ~/.bashrc${NC} (or .zshrc)${NC}"
+fi
+
 # --- Install Binary ---
 if [ -d "src" ] && [ -f "Cargo.toml" ]; then
     echo -e "${YELLOW}Compiling zbw from source...${NC}"
