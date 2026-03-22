@@ -1,39 +1,101 @@
 use std::process::Command;
 use std::os::unix::process::CommandExt;
-use std::thread;
-use std::time::Duration;
 use anyhow::{Result, Context, anyhow};
 use crate::vault::decrypt_string;
 use crate::models::{BwCipher, Config};
+use std::fs::OpenOptions;
+use std::io::Write;
+
+fn log_debug(msg: &str) {
+    if let Ok(mut file) = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open("/tmp/zbw_pass.log") {
+        let _ = writeln!(file, "{}", msg);
+    }
+}
 
 /// Citeste parola din optiunile tmux ale pane-ului curent si o injectează
 pub fn inject_password_from_tmux() -> Result<()> {
+    log_debug("--- Pass command started ---");
+
     // 1. Obținem ID-ul pane-ului curent
-    let pane_id = std::env::var("TMUX_PANE")
-        .context("Comanda 'pass' trebuie rulată dintr-o sesiune tmux")?;
+    let pane_id = match std::env::var("TMUX_PANE") {
+        Ok(id) => id,
+        Err(_) => {
+            log_debug("TMUX_PANE env missing, trying fallback via tmux display-message...");
+            let out_res = Command::new("tmux")
+                .args(["display-message", "-p", "#{pane_id}"])
+                .output();
+            
+            match out_res {
+                Ok(out) if out.status.success() => {
+                    let id = String::from_utf8_lossy(&out.stdout).trim().to_string();
+                    log_debug(&format!("Fallback found Pane ID: {}", id));
+                    id
+                },
+                _ => {
+                    log_debug("Error: Could not determine TMUX_PANE even with fallback");
+                    return Ok(());
+                }
+            }
+        }
+    };
 
-    // 2. Citim parola din variabila pane-ului (@server_pass)
-    let output = Command::new("tmux")
+    log_debug(&format!("Pane ID: {}", pane_id));
+
+    // 2. Citim parola. Revenim la show-options -pv care e mai testat pentru variabile de tip pane.
+    let output_res = Command::new("tmux")
         .args(["show-options", "-pv", "-t", &pane_id, "@server_pass"])
-        .output()?;
+        .output();
 
-    let password = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    let password = match output_res {
+        Ok(out) if out.status.success() => {
+            let pass = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            log_debug(&format!("Password found (length: {})", pass.len()));
+            pass
+        },
+        Ok(out) => {
+            let err = String::from_utf8_lossy(&out.stderr);
+            log_debug(&format!("Tmux show-options failed: {}", err));
+            String::new()
+        },
+        Err(e) => {
+            log_debug(&format!("Failed to execute tmux command: {}", e));
+            String::new()
+        }
+    };
 
     if password.is_empty() {
+        log_debug("No password found in @server_pass");
         let _ = Command::new("tmux")
-            .args(["display-message", "-t", &pane_id, "❌ No password found for this pane (@server_pass)"])
+            .args(["display-message", "-t", &pane_id, "❌ No password found for this pane"])
             .status();
         return Ok(());
     }
 
-    // 3. Trimitem parola
-    let _ = Command::new("tmux")
-        .args(["send-keys", "-t", &pane_id, &password, "Enter"])
+    // 3. Trimitem parola LITERAL
+    log_debug("Sending keys via tmux...");
+    
+    let status_literal = Command::new("tmux")
+        .args(["send-keys", "-t", &pane_id, "-l", "--", &password])
         .status();
 
-    let _ = Command::new("tmux")
-        .args(["display-message", "-t", &pane_id, "Password injected securely 🔐"])
+    let status_enter = Command::new("tmux")
+        .args(["send-keys", "-t", &pane_id, "Enter"])
         .status();
+
+    if status_literal.map_or(false, |s| s.success()) && status_enter.map_or(false, |s| s.success()) {
+        log_debug("Success: Keys sent");
+        let _ = Command::new("tmux")
+            .args(["display-message", "-t", &pane_id, "🔐 Password injected"])
+            .status();
+    } else {
+        log_debug("Error: Failed to send keys via tmux");
+        let _ = Command::new("tmux")
+            .args(["display-message", "-t", &pane_id, "❌ Error sending keys"])
+            .status();
+    }
 
     Ok(())
 }
@@ -47,7 +109,6 @@ pub fn spawn_ssh_window(item: &BwCipher, selected_uri: Option<String>) -> Result
 
     println!("🪟 Se deschide fereastra nouă pentru {}...", name);
 
-    // Folosim 'tmux new-window' pentru a lansa un nou proces zbw care va face SSH-ul efectiv
     let status = Command::new("tmux")
         .args([
             "new-window", 
@@ -63,11 +124,10 @@ pub fn spawn_ssh_window(item: &BwCipher, selected_uri: Option<String>) -> Result
     Ok(())
 }
 
-/// Execută conectarea SSH efectivă (trebuie rulat în fereastra destinație)
+/// Execută conectarea SSH efectivă
 pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option<String>) -> Result<()> {
     let mut client = crate::auth::get_client(config).await?;
     
-    // Avem nevoie de item pentru credențiale
     let items = crate::vault::fetch_filtered_items(config, &mut client, false).await?;
     let item = items.into_iter().find(|i| i.id == id)
         .context("Serverul nu a mai fost găsit în vault (ID invalid)")?;
@@ -76,7 +136,6 @@ pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option
     let login = item.login.as_ref().context("Acest item nu are date de login")?;
     let oid_ref = item.organization_id.as_deref();
 
-    // Decriptăm tot ce ne trebuie
     let username = login.username.as_ref()
         .and_then(|enc| decrypt_string(&client, enc, oid_ref).ok())
         .unwrap_or_else(|| "root".to_string());
@@ -100,11 +159,10 @@ pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option
 
     let host_clean = host.strip_prefix("ssh://").unwrap_or(&host).trim();
 
-    // Salvează metadatele în tmux environment/options
     set_tmux_metadata(name, &password, host_clean);
 
     if !password.is_empty() {
-        spawn_password_injector(password);
+        spawn_password_injector(&password);
     }
 
     println!("🚀 Conectare la {} ({})...", name, host_clean);
@@ -118,26 +176,23 @@ pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option
 
 fn set_tmux_metadata(name: &str, pass: &str, ip: &str) {
     if let Ok(pane_id) = std::env::var("TMUX_PANE") {
-        // Setăm variabile de tip Option (Prefix + p le folosește pe acestea)
         let _ = Command::new("tmux").args(["set-option", "-p", "-t", &pane_id, "@server_name", name]).status();
         let _ = Command::new("tmux").args(["set-option", "-p", "-t", &pane_id, "@server_pass", pass]).status();
         let _ = Command::new("tmux").args(["set-option", "-p", "-t", &pane_id, "@server_ip", ip]).status();
         
-        // Setăm și variabile de mediu efective în sesiune (pentru scripturi shell)
         let _ = Command::new("tmux").args(["set-environment", "SERVER_NAME", name]).status();
         let _ = Command::new("tmux").args(["set-environment", "SERVER_PASS", pass]).status();
         let _ = Command::new("tmux").args(["set-environment", "SERVER_IP", ip]).status();
     }
 }
 
-fn spawn_password_injector(password: String) {
+fn spawn_password_injector(password: &str) {
     if let Ok(pane_id) = std::env::var("TMUX_PANE") {
-        thread::spawn(move || {
-            // Așteptăm să se deschidă promptul de parolă al SSH-ului
-            thread::sleep(Duration::from_millis(1200));
-            let _ = Command::new("tmux")
-                .args(["send-keys", "-t", &pane_id, &password, "Enter"])
-                .status();
-        });
+        let _ = Command::new("sh")
+            .arg("-c")
+            .arg("sleep 1.2; tmux send-keys -t \"$PANE_ID\" -l -- \"$PASS\"; tmux send-keys -t \"$PANE_ID\" Enter")
+            .env("PANE_ID", pane_id)
+            .env("PASS", password)
+            .spawn();
     }
 }

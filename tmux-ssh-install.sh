@@ -54,11 +54,11 @@ sed -i '/# --- zbw/,+12d' "$TMUX_CONF" 2>/dev/null || true
 cat >> "$TMUX_CONF" << EOF
 
 # --- zbw (Bitwarden SSH) configuration ---
-bind-key s display-popup -E -w 80% -h 65% "$INSTALL_DIR/$BINARY_NAME"
-bind-key S display-popup -E -w 80% -h 65% "$INSTALL_DIR/$BINARY_NAME"
-bind-key g display-popup -E -w 80% -h 65% "$INSTALL_DIR/$BINARY_NAME snippets"
-bind-key G display-popup -E -w 80% -h 65% "$INSTALL_DIR/$BINARY_NAME snippets"
-bind-key "/" command-prompt -p "Search Vault:" "display-popup -E -w 80% -h 65% '$INSTALL_DIR/$BINARY_NAME search \"%%\"'"
+bind-key s display-popup -E -w 95% -h 85% "$INSTALL_DIR/$BINARY_NAME"
+bind-key S display-popup -E -w 95% -h 85% "$INSTALL_DIR/$BINARY_NAME"
+bind-key g display-popup -E -w 95% -h 85% "$INSTALL_DIR/$BINARY_NAME snippets"
+bind-key G display-popup -E -w 95% -h 85% "$INSTALL_DIR/$BINARY_NAME snippets"
+bind-key "/" command-prompt -p "Search Vault:" "display-popup -E -w 95% -h 85% '$INSTALL_DIR/$BINARY_NAME search \"%%\"'"
 bind-key -n C-p run-shell "$INSTALL_DIR/$BINARY_NAME pass"
 bind-key p run-shell "$INSTALL_DIR/$BINARY_NAME pass"
 EOF
