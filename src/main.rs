@@ -1,3 +1,6 @@
+// Copyright (C) 2026 [Numele Tău]
+// Licensed under GNU GPL v3
+
 mod models;
 mod config;
 mod auth;
@@ -73,6 +76,9 @@ async fn main() -> Result<()> {
         "snip" | "snippets" => {
             run_list_flow(&config, true, None).await?;
         },
+        "pass" => {
+            ssh::inject_password_from_tmux()?;
+        },
         "_connect" => {
             let id = args.get(2).context("Lipsă ID item")?;
             let ip = args.get(3).cloned();
@@ -117,8 +123,9 @@ async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>)
 
     let mut builder = SkimOptionsBuilder::default();
     builder
-        .height(Some("60%"))
-        .margin(Some("2,4,2,4"))
+        .height(Some("100%"))
+        .reverse(true)
+        .margin(Some("1,1,1,1"))
         .multi(false)
         .header(Some(if is_snippet { "Selectează Snippet" } else { "Selectează Server SSH" }))
         .prompt(Some("🔎 > "));
@@ -178,8 +185,9 @@ async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>)
 
                 let mut sub_builder = SkimOptionsBuilder::default();
                 sub_builder
-                    .height(Some("40%"))
-                    .margin(Some("2,8,2,8"))
+                    .height(Some("100%"))
+                    .reverse(true)
+                    .margin(Some("1,2,1,2"))
                     .header(Some("Selectează IP/Host"))
                     .prompt(Some("🌐 > "));
                 
