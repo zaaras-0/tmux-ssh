@@ -3,7 +3,7 @@
 set -e
 
 # --- Configuration ---
-REPO_URL="zaaras-0/tmux-ssh"
+REPO="zaaras-0/tmux-ssh"
 BINARY_NAME="zbw"
 INSTALL_DIR="$HOME/.local/bin"
 TMUX_CONF="$HOME/.tmux.conf"
