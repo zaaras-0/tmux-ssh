@@ -44,8 +44,8 @@ impl Config {
         let existing_config = Self::load().ok();
 
         // 1. Identitate (Folosim valorile din config dacă există)
-        let default_email = existing_config.as_ref().map(|c| c.email.as_str()).unwrap_or("adq0p0@gmail.com");
-        let default_server = existing_config.as_ref().map(|c| c.server_url.as_str()).unwrap_or("https://vault.znest.ro");
+        let default_email = existing_config.as_ref().map(|c| c.email.as_str()).unwrap_or("your-email@example.com");
+        let default_server = existing_config.as_ref().map(|c| c.server_url.as_str()).unwrap_or("https://vault.bitwarden.com");
 
         let email = prompts::ask_input("Email Bitwarden", Some(default_email.to_string()))?;
         let server_url = prompts::ask_input("Server URL (Vaultwarden)", Some(default_server.to_string()))?;
