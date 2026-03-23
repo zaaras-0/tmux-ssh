@@ -3,7 +3,7 @@
 set -e
 
 # --- Configuration ---
-REPO_URL="https://github.com/zaaras-0/tmux-ssh"
+REPO_URL="zaaras-0/tmux-ssh"
 BINARY_NAME="zbw"
 INSTALL_DIR="$HOME/.local/bin"
 TMUX_CONF="$HOME/.tmux.conf"
@@ -38,12 +38,18 @@ if [ "$PATH_ADDED" = true ]; then
 fi
 
 # --- Install Binary ---
-if [ -d "src" ] && [ -f "Cargo.toml" ]; then
-    echo -e "${YELLOW}Compiling zbw from source...${NC}"
-    cargo build --release
-    cp target/release/$BINARY_NAME "$INSTALL_DIR/"
+URL=$(curl -s "https://api.github.com/repos/$REPO/releases/latest" \
+    | grep "browser_download_url" \
+    | cut -d '"' -f 4)
+
+if [ -z "$URL" ]; then
+    echo "❌ Error: Could not find a Linux x86_64 binary in the latest release."
+    exit 1
 fi
 
+# 3. Download and make executable
+echo "📥 Downloading: $URL"
+curl -L "$URL" -o "$INSTALL_DIR/$BINARY_NAME"
 chmod +x "$INSTALL_DIR/$BINARY_NAME"
 
 # --- Tmux Configuration ---
