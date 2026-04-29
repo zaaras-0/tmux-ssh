@@ -24,6 +24,9 @@ pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snip
     if !sync_res.status().is_success() {
         let status = sync_res.status();
         let body = sync_res.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(anyhow!("SESSION_EXPIRED"));
+        }
         return Err(anyhow!("Eroare server Bitwarden ({}): {}", status, body));
     }
 

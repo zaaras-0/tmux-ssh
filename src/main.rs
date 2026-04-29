@@ -96,7 +96,16 @@ async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>)
     let mut client = auth::get_client(config).await?;
     
     println!("🔍 Se încarcă datele din Vault...");
-    let mut items = vault::fetch_filtered_items(config, &mut client, is_snippet).await?;
+    let mut items = match vault::fetch_filtered_items(config, &mut client, is_snippet).await {
+        Ok(items) => items,
+        Err(e) if e.to_string() == "SESSION_EXPIRED" => {
+            println!("⚠️ Sesiunea a expirat. Re-autentificare...");
+            auth::purge_session()?;
+            let mut new_client = auth::login_wizard(config).await?;
+            vault::fetch_filtered_items(config, &mut new_client, is_snippet).await?
+        },
+        Err(e) => return Err(e),
+    };
     
     // Sort items alphabetically by name
     items.sort_by(|a, b| {
@@ -209,7 +218,7 @@ async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>)
                 decrypted_uris.first().cloned()
             };
 
-            ssh::spawn_ssh_window(&chosen_item, selected_ip)?;
+            ssh::spawn_ssh_session(&chosen_item, selected_ip)?;
         }
     }
 

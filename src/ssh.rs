@@ -44,27 +44,21 @@ pub fn inject_password_from_tmux() -> Result<()> {
 
     log_debug(&format!("Pane ID: {}", pane_id));
 
-    // 2. Citim parola. Revenim la show-options -pv care e mai testat pentru variabile de tip pane.
-    let output_res = Command::new("tmux")
-        .args(["show-options", "-pv", "-t", &pane_id, "@server_pass"])
-        .output();
+    // 2. Citim parola. Încercăm întâi la nivel de pane, apoi la nivel de sesiune.
+    let mut password = String::new();
+    
+    // Încercăm pane
+    if let Ok(out) = Command::new("tmux").args(["show-options", "-pv", "-t", &pane_id, "@server_pass"]).output() {
+        password = String::from_utf8_lossy(&out.stdout).trim().to_string();
+    }
 
-    let password = match output_res {
-        Ok(out) if out.status.success() => {
-            let pass = String::from_utf8_lossy(&out.stdout).trim().to_string();
-            log_debug(&format!("Password found (length: {})", pass.len()));
-            pass
-        },
-        Ok(out) => {
-            let err = String::from_utf8_lossy(&out.stderr);
-            log_debug(&format!("Tmux show-options failed: {}", err));
-            String::new()
-        },
-        Err(e) => {
-            log_debug(&format!("Failed to execute tmux command: {}", e));
-            String::new()
+    // Dacă e gol, încercăm session
+    if password.is_empty() {
+        if let Ok(out) = Command::new("tmux").args(["show-options", "-sv", "@server_pass"]).output() {
+            password = String::from_utf8_lossy(&out.stdout).trim().to_string();
+            log_debug("Password found at session level");
         }
-    };
+    }
 
     if password.is_empty() {
         log_debug("No password found in @server_pass");
@@ -100,25 +94,48 @@ pub fn inject_password_from_tmux() -> Result<()> {
     Ok(())
 }
 
-/// Deschide o fereastră nouă de tmux care va rula comanda de conectare internă
-pub fn spawn_ssh_window(item: &BwCipher, selected_uri: Option<String>) -> Result<()> {
-    let name = item.name.as_deref().unwrap_or("Unknown");
+/// Deschide o sesiune nouă de tmux care va rula comanda de conectare internă
+pub fn spawn_ssh_session(item: &BwCipher, selected_uri: Option<String>) -> Result<()> {
+    let raw_name = item.name.as_deref().unwrap_or("Unknown");
+    // Igienizăm numele pentru tmux (fără puncte sau caractere speciale problematice)
+    let session_name = raw_name.replace('.', "_").replace(':', "_").replace(' ', "_");
+    
     let exe = std::env::current_exe()?.to_string_lossy().to_string();
     let id = &item.id;
     let ip = selected_uri.unwrap_or_default();
+    let connect_cmd = format!("{} _connect {} \"{}\"", exe, id, ip);
 
-    println!("🪟 Se deschide fereastra nouă pentru {}...", name);
+    println!("🪟 Se deschide sesiunea nouă '{}' pentru {}...", session_name, raw_name);
 
+    // 1. Creăm sesiunea cu default-command setat
+    // Folosim -d pentru a nu face attach imediat, deoarece vrem să setăm opțiuni întâi dacă e cazul
+    // sau să folosim switch-client dacă suntem deja în tmux.
     let status = Command::new("tmux")
         .args([
-            "new-window", 
-            "-n", &format!("ssh:{}", name),
-            &format!("{} _connect {} \"{}\"", exe, id, ip)
+            "new-session", 
+            "-d",
+            "-s", &session_name,
+            "-n", "ssh",
+            &connect_cmd
         ])
         .status()?;
 
     if !status.success() {
-        return Err(anyhow!("Eșec la crearea ferestrei tmux noi."));
+        // Dacă sesiunea există deja, poate ar trebui să facem doar switch? 
+        // User-ul a cerut sesiune nouă, dar în tmux numele trebuie să fie unic.
+        println!("⚠️ Sesiunea '{}' există deja sau nu a putut fi creată.", session_name);
+    }
+
+    // 2. Setăm default-command pentru ferestre/pane-uri noi în această sesiune
+    let _ = Command::new("tmux")
+        .args(["set-option", "-t", &session_name, "default-command", &connect_cmd])
+        .status();
+
+    // 3. Facem switch la sesiune
+    if std::env::var("TMUX").is_ok() {
+        Command::new("tmux").args(["switch-client", "-t", &session_name]).status()?;
+    } else {
+        Command::new("tmux").args(["attach-session", "-t", &session_name]).status()?;
     }
 
     Ok(())
@@ -128,7 +145,17 @@ pub fn spawn_ssh_window(item: &BwCipher, selected_uri: Option<String>) -> Result
 pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option<String>) -> Result<()> {
     let mut client = crate::auth::get_client(config).await?;
     
-    let items = crate::vault::fetch_filtered_items(config, &mut client, false).await?;
+    let items = match crate::vault::fetch_filtered_items(config, &mut client, false).await {
+        Ok(items) => items,
+        Err(e) if e.to_string() == "SESSION_EXPIRED" => {
+            println!("⚠️ Sesiunea a expirat. Re-autentificare...");
+            crate::auth::purge_session()?;
+            let mut new_client = crate::auth::login_wizard(config).await?;
+            crate::vault::fetch_filtered_items(config, &mut new_client, false).await?
+        },
+        Err(e) => return Err(e),
+    };
+
     let item = items.into_iter().find(|i| i.id == id)
         .context("Serverul nu a mai fost găsit în vault (ID invalid)")?;
 
@@ -176,10 +203,16 @@ pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option
 
 fn set_tmux_metadata(name: &str, pass: &str, ip: &str) {
     if let Ok(pane_id) = std::env::var("TMUX_PANE") {
+        // La nivel de Pane
         let _ = Command::new("tmux").args(["set-option", "-p", "-t", &pane_id, "@server_name", name]).status();
         let _ = Command::new("tmux").args(["set-option", "-p", "-t", &pane_id, "@server_pass", pass]).status();
         let _ = Command::new("tmux").args(["set-option", "-p", "-t", &pane_id, "@server_ip", ip]).status();
         
+        // La nivel de Sesiune (pentru pane-uri noi)
+        let _ = Command::new("tmux").args(["set-option", "@server_name", name]).status();
+        let _ = Command::new("tmux").args(["set-option", "@server_pass", pass]).status();
+        let _ = Command::new("tmux").args(["set-option", "@server_ip", ip]).status();
+
         let _ = Command::new("tmux").args(["set-environment", "SERVER_NAME", name]).status();
         let _ = Command::new("tmux").args(["set-environment", "SERVER_PASS", pass]).status();
         let _ = Command::new("tmux").args(["set-environment", "SERVER_IP", ip]).status();
