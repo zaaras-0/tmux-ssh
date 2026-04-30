@@ -19,6 +19,9 @@ async fn main() -> Result<()> {
     let args: Vec<String> = env::args().collect();
     let command = args.get(1).map(|s| s.as_str()).unwrap_or("list");
 
+    // Verificăm flag-ul de refresh (-r sau --refresh)
+    let force_refresh = args.iter().any(|a| a == "-r" || a == "--refresh") || command == "sync";
+
     // 1. Verificăm Status (doar dacă vault-ul e deblocat - sesiunea e validă)
     if command == "status" {
         if auth::get_active_session().is_ok() {
@@ -56,6 +59,12 @@ async fn main() -> Result<()> {
 
     // 4. Dispatcher Comenzi Principale
     match command {
+        "sync" => {
+            let mut client = auth::get_client(&config).await?;
+            println!("🔄 Se sincronizează datele din Vault...");
+            vault::fetch_filtered_items(&config, &mut client, false, true).await?;
+            println!("✅ Sincronizare finalizată și cache actualizat.");
+        },
         "config" => {
             Config::run_wizard().await?;
         },
@@ -63,18 +72,23 @@ async fn main() -> Result<()> {
             auth::login_wizard(&config).await?;
         },
         "list" | "ssh" => {
-            run_list_flow(&config, false, None).await?;
+            run_list_flow(&config, false, None, force_refresh).await?;
         },
         "search" => {
-            let query = args.get(2).cloned();
+            // Căutăm query-ul excluzând flag-urile și comanda search
+            let query = args.iter()
+                .filter(|a| !a.starts_with('-') && *a != "search" && *a != command && !env::current_exe().unwrap().to_string_lossy().contains(*a))
+                .nth(0)
+                .cloned();
+                
             let final_query = match query {
                 Some(q) => Some(q),
                 None => Some(prompts::ask_input("Caută în Vault", None)?),
             };
-            run_list_flow(&config, false, final_query).await?;
+            run_list_flow(&config, false, final_query, force_refresh).await?;
         },
         "snip" | "snippets" => {
-            run_list_flow(&config, true, None).await?;
+            run_list_flow(&config, true, None, force_refresh).await?;
         },
         "pass" => {
             ssh::inject_password_from_tmux()?;
@@ -85,24 +99,24 @@ async fn main() -> Result<()> {
             ssh::execute_ssh_internal(&config, id, ip).await?;
         },
         _ => {
-            println!("Comandă necunoscută: {}. Utilizați: list, search, ssh, snippets, config, login, lock, purge, status.", command);
+            println!("Comandă necunoscută: {}. Utilizați: list, search, ssh, snippets, sync, config, login, lock, purge, status.", command);
         }
     }
 
     Ok(())
 }
 
-async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>) -> Result<()> {
+async fn run_list_flow(config: &Config, is_snippet: bool, query: Option<String>, force_refresh: bool) -> Result<()> {
     let mut client = auth::get_client(config).await?;
     
-    println!("🔍 Se încarcă datele din Vault...");
-    let mut items = match vault::fetch_filtered_items(config, &mut client, is_snippet).await {
+    println!("🔍 Se încarcă datele...");
+    let mut items = match vault::fetch_filtered_items(config, &mut client, is_snippet, force_refresh).await {
         Ok(items) => items,
         Err(e) if e.to_string() == "SESSION_EXPIRED" => {
             println!("⚠️ Sesiunea a expirat. Re-autentificare...");
             auth::purge_session()?;
             let mut new_client = auth::login_wizard(config).await?;
-            vault::fetch_filtered_items(config, &mut new_client, is_snippet).await?
+            vault::fetch_filtered_items(config, &mut new_client, is_snippet, force_refresh).await?
         },
         Err(e) => return Err(e),
     };

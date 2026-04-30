@@ -56,6 +56,16 @@ pub struct BwCipher {
     pub login: Option<BwCipherLogin>,
     #[serde(default)]
     pub collection_ids: Option<Vec<String>>,
+    #[serde(default)]
+    pub fields: Option<Vec<BwField>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BwField {
+    pub name: Option<String>,
+    pub value: Option<String>,
+    pub r#type: i32, // 0 = Text, 1 = Hidden, 2 = Boolean
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

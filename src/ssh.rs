@@ -131,7 +131,20 @@ pub fn spawn_ssh_session(item: &BwCipher, selected_uri: Option<String>) -> Resul
         .args(["set-option", "-t", &session_name, "default-command", &connect_cmd])
         .status();
 
-    // 3. Facem switch la sesiune
+    // 3. Personalizăm Status Bar-ul pentru această sesiune
+    // Afișăm Numele Serverului și IP-ul în stânga
+    let status_left = format!(
+        "#[fg=black,bg=green,bold] #S #[fg=green,bg=black,nobold] #[fg=white,bold]{} #[fg=yellow,nobold] {} #[fg=black,bg=default,nobold] ",
+        raw_name, ip
+    );
+    let _ = Command::new("tmux")
+        .args(["set-option", "-t", &session_name, "status-left", &status_left])
+        .status();
+    let _ = Command::new("tmux")
+        .args(["set-option", "-t", &session_name, "status-left-length", "100"])
+        .status();
+
+    // 4. Facem switch la sesiune
     if std::env::var("TMUX").is_ok() {
         Command::new("tmux").args(["switch-client", "-t", &session_name]).status()?;
     } else {
@@ -145,13 +158,13 @@ pub fn spawn_ssh_session(item: &BwCipher, selected_uri: Option<String>) -> Resul
 pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option<String>) -> Result<()> {
     let mut client = crate::auth::get_client(config).await?;
     
-    let items = match crate::vault::fetch_filtered_items(config, &mut client, false).await {
+    let items = match crate::vault::fetch_filtered_items(config, &mut client, false, false).await {
         Ok(items) => items,
         Err(e) if e.to_string() == "SESSION_EXPIRED" => {
             println!("⚠️ Sesiunea a expirat. Re-autentificare...");
             crate::auth::purge_session()?;
             let mut new_client = crate::auth::login_wizard(config).await?;
-            crate::vault::fetch_filtered_items(config, &mut new_client, false).await?
+            crate::vault::fetch_filtered_items(config, &mut new_client, false, false).await?
         },
         Err(e) => return Err(e),
     };
@@ -186,15 +199,32 @@ pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option
 
     let host_clean = host.strip_prefix("ssh://").unwrap_or(&host).trim();
 
+    // Căutăm un câmp custom pentru PORT
+    let mut port = "22".to_string();
+    if let Some(fields) = &item.fields {
+        for f in fields {
+            if let (Some(fname), Some(fval)) = (&f.name, &f.value) {
+                // Decriptăm numele câmpului (uneori e criptat, alteori nu, depinde de SDK/Vaultwarden)
+                let dec_fname = decrypt_string(&client, fname, oid_ref).unwrap_or(fname.clone());
+                if dec_fname.to_lowercase() == "port" {
+                    port = decrypt_string(&client, fval, oid_ref).unwrap_or(fval.clone());
+                    break;
+                }
+            }
+        }
+    }
+
     set_tmux_metadata(name, &password, host_clean);
 
     if !password.is_empty() {
         spawn_password_injector(&password);
     }
 
-    println!("🚀 Conectare la {} ({})...", name, host_clean);
+    println!("🚀 Conectare la {} ({} : port {})...", name, host_clean, port);
     
     let err = Command::new("ssh")
+        .arg("-p")
+        .arg(&port)
         .arg(format!("{}@{}", username, host_clean))
         .exec();
 

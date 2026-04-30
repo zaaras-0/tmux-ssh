@@ -1,36 +1,27 @@
 use anyhow::{Result, anyhow, Context};
 use bitwarden_core::Client;
-use bitwarden_crypto::KeyDecryptable;
-use bitwarden_crypto::EncString;
+use bitwarden_crypto::{KeyDecryptable, KeyEncryptable, EncString};
 use serde_json::Value;
 use std::str::FromStr;
 use crate::models::*;
 
+use std::fs;
+use std::path::PathBuf;
+
 /// Extrage toate item-urile filtrate conform configurației (Personal + Orgs)
-pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snippet: bool) -> Result<Vec<BwCipher>> {
-    let api_configs = client.internal.get_api_configurations().await;
-    let api_url = api_configs.api_config.base_path.clone();
-    let access_token = api_configs.api_config.oauth_access_token.clone().unwrap_or_default();
-
-    let http_client = reqwest::Client::builder()
-        .use_rustls_tls()
-        .build()?;
-
-    println!("🔍 Se încarcă datele din seif...");
-    let sync_res = http_client.get(format!("{}/sync", api_url))
-        .bearer_auth(&access_token)
-        .send().await?;
-
-    if !sync_res.status().is_success() {
-        let status = sync_res.status();
-        let body = sync_res.text().await.unwrap_or_default();
-        if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(anyhow!("SESSION_EXPIRED"));
+pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snippet: bool, force_refresh: bool) -> Result<Vec<BwCipher>> {
+    let sync_data = if force_refresh {
+        println!("🔄 Refresh forțat din rețea...");
+        fetch_and_cache_sync(client).await?
+    } else {
+        match load_cached_sync(client).await {
+            Ok(data) => data,
+            Err(_) => {
+                println!("🌐 Cache lipsă sau invalid. Se descarcă datele...");
+                fetch_and_cache_sync(client).await?
+            }
         }
-        return Err(anyhow!("Eroare server Bitwarden ({}): {}", status, body));
-    }
-
-    let sync_data: Value = sync_res.json().await?;
+    };
 
     let ciphers_val = sync_data["ciphers"].as_array().context("Nu am găsit ciphers în sync")?;
     let mut ciphers: Vec<BwCipher> = serde_json::from_value(serde_json::Value::Array(ciphers_val.clone()))?;
@@ -103,6 +94,86 @@ pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snip
     }
 
     Ok(ciphers)
+}
+
+async fn fetch_and_cache_sync(client: &mut Client) -> Result<Value> {
+    let api_configs = client.internal.get_api_configurations().await;
+    let api_url = api_configs.api_config.base_path.clone();
+    let access_token = api_configs.api_config.oauth_access_token.clone().unwrap_or_default();
+
+    let http_client = reqwest::Client::builder()
+        .use_rustls_tls()
+        .build()?;
+
+    let sync_res = http_client.get(format!("{}/sync", api_url))
+        .bearer_auth(&access_token)
+        .send().await?;
+
+    if !sync_res.status().is_success() {
+        let status = sync_res.status();
+        let body = sync_res.text().await.unwrap_or_default();
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(anyhow!("SESSION_EXPIRED"));
+        }
+        return Err(anyhow!("Eroare server Bitwarden ({}): {}", status, body));
+    }
+
+    let sync_data: Value = sync_res.json().await?;
+    
+    // Salvăm în cache
+    let _ = save_cached_sync(client, &sync_data);
+
+    Ok(sync_data)
+}
+
+fn get_cache_path() -> Result<PathBuf> {
+    let mut path = dirs::cache_dir().context("Nu s-a putut găsi directorul de cache")?;
+    path.push("zbw");
+    if !path.exists() {
+        fs::create_dir_all(&path)?;
+    }
+    path.push("vault_cache.enc");
+    Ok(path)
+}
+
+fn save_cached_sync(client: &Client, data: &Value) -> Result<()> {
+    let json_str = serde_json::to_string(data)?;
+    let key_store = client.internal.get_key_store();
+    let ctx = key_store.context();
+    
+    #[allow(deprecated)]
+    let user_key = ctx.dangerous_get_symmetric_key(bitwarden_core::key_management::SymmetricKeyId::User)
+        .map_err(|_| anyhow!("User key missing for cache encryption"))?;
+
+    let enc_string = json_str.encrypt_with_key(user_key)
+        .map_err(|e| anyhow!("Cache encryption failed: {:?}", e))?;
+    
+    fs::write(get_cache_path()?, enc_string.to_string())?;
+    Ok(())
+}
+
+async fn load_cached_sync(client: &Client) -> Result<Value> {
+    let path = get_cache_path()?;
+    if !path.exists() {
+        return Err(anyhow!("Cache missing"));
+    }
+
+    let enc_str = fs::read_to_string(path)?;
+    let enc_string = EncString::from_str(&enc_str)
+        .map_err(|e| anyhow!("Cache parsing error: {:?}", e))?;
+
+    let key_store = client.internal.get_key_store();
+    let ctx = key_store.context();
+    
+    #[allow(deprecated)]
+    let user_key = ctx.dangerous_get_symmetric_key(bitwarden_core::key_management::SymmetricKeyId::User)
+        .map_err(|_| anyhow!("User key missing for cache decryption"))?;
+
+    let dec_bytes: Vec<u8> = enc_string.decrypt_with_key(user_key)
+        .map_err(|_| anyhow!("Cache decryption failed"))?;
+
+    let data: Value = serde_json::from_slice(&dec_bytes)?;
+    Ok(data)
 }
 
 pub fn decrypt_string(client: &Client, encrypted: &str, org_id: Option<&str>) -> Result<String> {
