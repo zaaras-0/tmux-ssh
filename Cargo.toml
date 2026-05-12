@@ -34,3 +34,4 @@ shell-words = "1.1"
 uuid = { version = "1.0", features = ["serde", "v4"] }
 base64 = "0.22"
 thiserror = "2.0.18"
+ssh2 = { version = "0.9.5", features = ["vendored-openssl"] }

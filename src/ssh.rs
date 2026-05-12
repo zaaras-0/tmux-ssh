@@ -157,23 +157,46 @@ pub fn spawn_ssh_session(item: &BwCipher, selected_uri: Option<String>) -> Resul
 /// Execută conectarea SSH efectivă
 pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option<String>) -> Result<()> {
     let mut client = crate::auth::get_client(config).await?;
+    let details = get_server_details(config, &mut client, id, selected_ip).await?;
+
+    set_tmux_metadata(&details.name, details.password.as_deref().unwrap_or(""), &details.host);
+
+    if let Some(password) = &details.password {
+        spawn_password_injector(password);
+    }
+
+    println!("🚀 Conectare la {} ({} : port {})...", details.name, details.host, details.port);
     
-    let items = crate::vault::fetch_filtered_items(config, &mut client, false, false).await?;
+    let err = Command::new("ssh")
+        .arg("-p")
+        .arg(details.port.to_string())
+        .arg(format!("{}@{}", details.username, details.host))
+        .exec();
+
+    Err(anyhow!("Eșec la pornirea SSH: {}", err))
+}
+
+pub async fn get_server_details(
+    config: &Config, 
+    client: &mut bitwarden_core::Client, 
+    id: &str, 
+    selected_ip: Option<String>
+) -> Result<crate::models::ServerDetails> {
+    let items = crate::vault::fetch_filtered_items(config, client, false, false).await?;
 
     let item = items.into_iter().find(|i| i.id == id)
         .context("Serverul nu a mai fost găsit în vault (ID invalid)")?;
 
-    let name = item.name.as_deref().unwrap_or("Unknown");
+    let name = item.name.as_deref().unwrap_or("Unknown").to_string();
     let login = item.login.as_ref().context("Acest item nu are date de login")?;
     let oid_ref = item.organization_id.as_deref();
 
     let username = login.username.as_ref()
-        .and_then(|enc| decrypt_string(&client, enc, oid_ref).ok())
+        .and_then(|enc| decrypt_string(client, enc, oid_ref).ok())
         .unwrap_or_else(|| "root".to_string());
 
     let password = login.password.as_ref()
-        .and_then(|enc| decrypt_string(&client, enc, oid_ref).ok())
-        .unwrap_or_default();
+        .and_then(|enc| decrypt_string(client, enc, oid_ref).ok());
     
     let host = if let Some(ip) = selected_ip {
         if ip.is_empty() {
@@ -184,42 +207,34 @@ pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option
         login.uris.as_ref()
             .and_then(|u| u.first())
             .and_then(|uri| uri.uri.as_ref())
-            .and_then(|enc_uri| decrypt_string(&client, enc_uri, oid_ref).ok())
+            .and_then(|enc_uri| decrypt_string(client, enc_uri, oid_ref).ok())
             .context("Item-ul nu are un URI valid pentru SSH")?
     };
 
-    let host_clean = host.strip_prefix("ssh://").unwrap_or(&host).trim();
+    let host_clean = host.strip_prefix("ssh://").unwrap_or(&host).trim().to_string();
 
     // Căutăm un câmp custom pentru PORT
-    let mut port = "22".to_string();
+    let mut port = 22;
     if let Some(fields) = &item.fields {
         for f in fields {
             if let (Some(fname), Some(fval)) = (&f.name, &f.value) {
-                // Decriptăm numele câmpului (uneori e criptat, alteori nu, depinde de SDK/Vaultwarden)
-                let dec_fname = decrypt_string(&client, fname, oid_ref).unwrap_or(fname.clone());
+                let dec_fname = decrypt_string(client, fname, oid_ref).unwrap_or(fname.clone());
                 if dec_fname.to_lowercase() == "port" {
-                    port = decrypt_string(&client, fval, oid_ref).unwrap_or(fval.clone());
+                    let p_str = decrypt_string(client, fval, oid_ref).unwrap_or(fval.clone());
+                    port = p_str.parse().unwrap_or(22);
                     break;
                 }
             }
         }
     }
 
-    set_tmux_metadata(name, &password, host_clean);
-
-    if !password.is_empty() {
-        spawn_password_injector(&password);
-    }
-
-    println!("🚀 Conectare la {} ({} : port {})...", name, host_clean, port);
-    
-    let err = Command::new("ssh")
-        .arg("-p")
-        .arg(&port)
-        .arg(format!("{}@{}", username, host_clean))
-        .exec();
-
-    Err(anyhow!("Eșec la pornirea SSH: {}", err))
+    Ok(crate::models::ServerDetails {
+        name,
+        host: host_clean,
+        port,
+        username,
+        password,
+    })
 }
 
 fn set_tmux_metadata(name: &str, pass: &str, ip: &str) {

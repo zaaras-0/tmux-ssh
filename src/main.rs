@@ -8,6 +8,7 @@ mod vault;
 mod prompts;
 mod ssh;
 mod snippets;
+mod sftp;
 
 use anyhow::{Context, Result};
 use crate::models::Config;
@@ -92,6 +93,9 @@ async fn main() -> Result<()> {
         },
         "pass" => {
             ssh::inject_password_from_tmux()?;
+        },
+        "sftp" => {
+            sftp::run_sftp_flow(&config).await?;
         },
         "_connect" => {
             let id = args.get(2).context("Lipsă ID item")?;

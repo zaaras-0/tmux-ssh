@@ -1,6 +1,15 @@
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
+#[derive(Debug, Clone)]
+pub struct ServerDetails {
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: Option<String>,
+}
+
 #[derive(Error, Debug)]
 pub enum ZbwError {
     #[error("SESSION_EXPIRED")]
