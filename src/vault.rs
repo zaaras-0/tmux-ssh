@@ -9,19 +9,8 @@ use std::fs;
 use std::path::PathBuf;
 
 /// Extrage toate item-urile filtrate conform configurației (Personal + Orgs)
-pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snippet: bool, force_refresh: bool) -> Result<Vec<BwCipher>> {
-    let sync_data = if force_refresh {
-        println!("🔄 Refresh forțat din rețea...");
-        fetch_and_cache_sync(client).await?
-    } else {
-        match load_cached_sync(client).await {
-            Ok(data) => data,
-            Err(_) => {
-                println!("🌐 Cache lipsă sau invalid. Se descarcă datele...");
-                fetch_and_cache_sync(client).await?
-            }
-        }
-    };
+pub async fn fetch_filtered_items(config: &Config, client: &mut Client, is_snippet: bool, force_refresh: bool) -> Result<Vec<BwCipher>> {
+    let sync_data = fetch_sync_with_reauth(client, config, force_refresh).await?;
 
     let ciphers_val = sync_data["ciphers"].as_array().context("Nu am găsit ciphers în sync")?;
     let mut ciphers: Vec<BwCipher> = serde_json::from_value(serde_json::Value::Array(ciphers_val.clone()))?;
@@ -30,9 +19,9 @@ pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snip
     let folders = list_folders_from_sync(&sync_data, client).await?;
     
     let target_folder_name = if is_snippet {
-        &_config.personal_snippets_folder
+        &config.personal_snippets_folder
     } else {
-        &_config.personal_folder
+        &config.personal_folder
     };
 
     let personal_folder_id = folders.iter()
@@ -43,7 +32,7 @@ pub async fn fetch_filtered_items(_config: &Config, client: &mut Client, is_snip
     let mut selected_collection_ids = Vec::new();
     let orgs = list_organizations_from_sync(&sync_data, client).await?;
 
-    for org_conf in &_config.organizations {
+    for org_conf in &config.organizations {
         if let Some(org) = orgs.iter().find(|o| o.name == org_conf.name) {
             let all_collections = list_collections_from_sync(&sync_data, client, &org.id).await?;
             let collections_to_check = if is_snippet {
@@ -113,7 +102,7 @@ async fn fetch_and_cache_sync(client: &mut Client) -> Result<Value> {
         let status = sync_res.status();
         let body = sync_res.text().await.unwrap_or_default();
         if status == reqwest::StatusCode::UNAUTHORIZED {
-            return Err(anyhow!("SESSION_EXPIRED"));
+            return Err(ZbwError::SessionExpired.into());
         }
         return Err(anyhow!("Eroare server Bitwarden ({}): {}", status, body));
     }
@@ -211,17 +200,8 @@ pub fn decrypt_string(client: &Client, encrypted: &str, org_id: Option<&str>) ->
     Err(anyhow!("Nu am putut decripta stringul cu nicio cheie disponibilă."))
 }
 
-pub async fn list_folders(client: &Client) -> Result<Vec<BwFolder>> {
-    let api_configs = client.internal.get_api_configurations().await;
-    let api_url = api_configs.api_config.base_path.clone();
-    let access_token = api_configs.api_config.oauth_access_token.clone().unwrap_or_default();
-
-    let http_client = reqwest::Client::builder().use_rustls_tls().build()?;
-    let sync_res = http_client.get(format!("{}/sync", api_url))
-        .bearer_auth(&access_token)
-        .send().await?;
-    let sync_data: Value = sync_res.json().await?;
-
+pub async fn list_folders(client: &mut Client, config: &Config) -> Result<Vec<BwFolder>> {
+    let sync_data = fetch_sync_with_reauth(client, config, false).await?;
     list_folders_from_sync(&sync_data, client).await
 }
 
@@ -243,17 +223,8 @@ async fn list_folders_from_sync(sync_data: &Value, client: &Client) -> Result<Ve
     Ok(result)
 }
 
-pub async fn list_organizations(client: &Client) -> Result<Vec<BwOrganization>> {
-    let api_configs = client.internal.get_api_configurations().await;
-    let api_url = api_configs.api_config.base_path.clone();
-    let access_token = api_configs.api_config.oauth_access_token.clone().unwrap_or_default();
-
-    let http_client = reqwest::Client::builder().use_rustls_tls().build()?;
-    let sync_res = http_client.get(format!("{}/sync", api_url))
-        .bearer_auth(&access_token)
-        .send().await?;
-    let sync_data: Value = sync_res.json().await?;
-
+pub async fn list_organizations(client: &mut Client, config: &Config) -> Result<Vec<BwOrganization>> {
+    let sync_data = fetch_sync_with_reauth(client, config, false).await?;
     list_organizations_from_sync(&sync_data, client).await
 }
 
@@ -271,18 +242,59 @@ async fn list_organizations_from_sync(sync_data: &Value, _client: &Client) -> Re
     Ok(result)
 }
 
-pub async fn list_collections(client: &Client, org_id: &str) -> Result<Vec<BwCollection>> {
-    let api_configs = client.internal.get_api_configurations().await;
-    let api_url = api_configs.api_config.base_path.clone();
-    let access_token = api_configs.api_config.oauth_access_token.clone().unwrap_or_default();
-
-    let http_client = reqwest::Client::builder().use_rustls_tls().build()?;
-    let sync_res = http_client.get(format!("{}/sync", api_url))
-        .bearer_auth(&access_token)
-        .send().await?;
-    let sync_data: Value = sync_res.json().await?;
-
+pub async fn list_collections(client: &mut Client, config: &Config, org_id: &str) -> Result<Vec<BwCollection>> {
+    let sync_data = fetch_sync_with_reauth(client, config, false).await?;
     list_collections_from_sync(&sync_data, client, org_id).await
+}
+
+use std::time::SystemTime;
+
+/// Helper centralizat pentru sync cu retry pe re-autentificare
+async fn fetch_sync_with_reauth(client: &mut Client, config: &Config, force_refresh: bool) -> Result<Value> {
+    let mut refresh_needed = force_refresh;
+
+    let res = if !refresh_needed {
+        match load_cached_sync(client).await {
+            Ok(data) => {
+                // Verificăm vârsta cache-ului (Adaptive Sync)
+                if let Ok(metadata) = fs::metadata(get_cache_path()?) {
+                    if let Ok(modified) = metadata.modified() {
+                        let now = SystemTime::now();
+                        if let Ok(duration) = now.duration_since(modified) {
+                            if duration.as_secs() > 3600 { // 1 oră
+                                println!("🕒 Cache-ul este vechi ( > 1h). Se actualizează...");
+                                refresh_needed = true;
+                            }
+                        }
+                    }
+                }
+                
+                if refresh_needed {
+                    fetch_and_cache_sync(client).await
+                } else {
+                    Ok(data)
+                }
+            },
+            Err(_) => {
+                println!("🌐 Cache lipsă sau invalid. Se descarcă datele...");
+                fetch_and_cache_sync(client).await
+            }
+        }
+    } else {
+        fetch_and_cache_sync(client).await
+    };
+
+    match res {
+        Ok(data) => Ok(data),
+        Err(e) if e.downcast_ref::<ZbwError>().map_or(false, |ee| matches!(ee, ZbwError::SessionExpired)) => {
+            println!("⚠️ Sesiunea a expirat. Re-autentificare...");
+            crate::auth::purge_session()?;
+            let new_client = crate::auth::login_wizard(config).await?;
+            *client = new_client;
+            fetch_and_cache_sync(client).await
+        }
+        Err(e) => Err(e),
+    }
 }
 
 async fn list_collections_from_sync(sync_data: &Value, client: &Client, org_id: &str) -> Result<Vec<BwCollection>> {

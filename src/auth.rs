@@ -248,10 +248,6 @@ pub fn get_active_session() -> Result<String> {
     Ok(session.access_token)
 }
 
-pub fn check_status(_session: &Option<String>) -> Result<Value> {
-    Ok(serde_json::json!({"status": "Authenticated"}))
-}
-
 fn load_session() -> Result<SessionData> {
     let content = fs::read_to_string(SESSION_FILE)?;
     Ok(serde_json::from_str(&content)?)

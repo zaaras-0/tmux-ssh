@@ -158,16 +158,7 @@ pub fn spawn_ssh_session(item: &BwCipher, selected_uri: Option<String>) -> Resul
 pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option<String>) -> Result<()> {
     let mut client = crate::auth::get_client(config).await?;
     
-    let items = match crate::vault::fetch_filtered_items(config, &mut client, false, false).await {
-        Ok(items) => items,
-        Err(e) if e.to_string() == "SESSION_EXPIRED" => {
-            println!("⚠️ Sesiunea a expirat. Re-autentificare...");
-            crate::auth::purge_session()?;
-            let mut new_client = crate::auth::login_wizard(config).await?;
-            crate::vault::fetch_filtered_items(config, &mut new_client, false, false).await?
-        },
-        Err(e) => return Err(e),
-    };
+    let items = crate::vault::fetch_filtered_items(config, &mut client, false, false).await?;
 
     let item = items.into_iter().find(|i| i.id == id)
         .context("Serverul nu a mai fost găsit în vault (ID invalid)")?;

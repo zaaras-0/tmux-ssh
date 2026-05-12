@@ -1,4 +1,17 @@
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum ZbwError {
+    #[error("SESSION_EXPIRED")]
+    SessionExpired,
+    #[error("Configurația nu a fost găsită")]
+    ConfigNotFound,
+    #[error("Eroare Bitwarden: {0}")]
+    BitwardenError(String),
+    #[error("Eroare de sistem: {0}")]
+    SystemError(String),
+}
 
 // --- Configurația Aplicației zbw ---
 

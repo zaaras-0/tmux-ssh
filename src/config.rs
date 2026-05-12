@@ -65,11 +65,11 @@ impl Config {
         };
 
         // 2. Login
-        let client = auth::login_wizard(&config).await?;
+        let mut client = auth::login_wizard(&config).await?;
 
         // 3. Extragere foldere pentru Personal (Servers & Snippets)
         println!("🔍 Se încarcă folderele din Vault...");
-        let folders = vault::list_folders(&client).await?; 
+        let folders = vault::list_folders(&mut client, &config).await?; 
         
         if folders.is_empty() {
             return Err(anyhow::anyhow!("Nu s-au găsit foldere în acest cont. Creați unul în Bitwarden mai întâi."));
@@ -96,10 +96,10 @@ impl Config {
         // 4. Configurare Organizații (Opțional)
         let mut selected_orgs = Vec::new();
         if prompts::ask_confirm("Doriți să adăugați și iteme dintr-o Organizație?")? {
-            let orgs = vault::list_organizations(&client).await?;
+            let orgs = vault::list_organizations(&mut client, &config).await?;
             for org in orgs {
                 if prompts::ask_confirm(&format!("Includeți organizația '{}'?", org.name))? {
-                    let collections = vault::list_collections(&client, &org.id).await?;
+                    let collections = vault::list_collections(&mut client, &config, &org.id).await?;
                     if collections.is_empty() {
                         println!("⚠️ Nu s-au găsit colecții în organizația '{}'.", org.name);
                         continue;
