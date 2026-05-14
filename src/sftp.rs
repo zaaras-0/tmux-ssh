@@ -1,11 +1,8 @@
-use std::net::TcpStream;
 use std::path::PathBuf;
 use anyhow::{Result, Context, anyhow};
-use ssh2::Session;
 use crate::models::Config;
-use crate::ssh::get_server_details;
+use crate::ssh::{pick_server, establish_ssh_session};
 use crate::auth;
-use crate::vault;
 use skim::prelude::*;
 
 pub async fn run_sftp_flow(config: &Config) -> Result<()> {
@@ -31,7 +28,8 @@ async fn upload_flow(config: &Config, client: &mut bitwarden_core::Client) -> Re
     
     // 2. Select Server
     let server = pick_server(config, client).await?;
-    let (_session, sftp) = establish_sftp_session(config, client, &server.id).await?;
+    let session = establish_ssh_session(config, client, &server.id).await?;
+    let sftp = session.sftp().context("Nu s-a putut inițializa SFTP")?;
     
     // 3. Pick Remote Destination Dir
     let mut remote_path = remote_browser(&sftp, ".", true).context("Nu s-a selectat niciun director la distanță")?;
@@ -58,7 +56,8 @@ async fn upload_flow(config: &Config, client: &mut bitwarden_core::Client) -> Re
 async fn download_flow(config: &Config, client: &mut bitwarden_core::Client) -> Result<()> {
     // 1. Select Server
     let server = pick_server(config, client).await?;
-    let (_session, sftp) = establish_sftp_session(config, client, &server.id).await?;
+    let session = establish_ssh_session(config, client, &server.id).await?;
+    let sftp = session.sftp().context("Nu s-a putut inițializa SFTP")?;
 
     // 2. Pick Remote File
     let remote_file_path = remote_browser(&sftp, ".", false).context("Nu s-a selectat niciun fișier la distanță")?;
@@ -232,13 +231,15 @@ async fn relay_flow(config: &Config, client: &mut bitwarden_core::Client) -> Res
     // 1. Server Sursă
     println!("--- Selectează Server Sursă ---");
     let server_a = pick_server(config, client).await?;
-    let (_sess_a, sftp_a) = establish_sftp_session(config, client, &server_a.id).await?;
+    let sess_a = establish_ssh_session(config, client, &server_a.id).await?;
+    let sftp_a = sess_a.sftp().context("Nu s-a putut inițializa SFTP pe sursă")?;
     let remote_file_a = remote_browser(&sftp_a, ".", false).context("Nu s-a selectat fișierul sursă")?;
 
     // 2. Server Destinație
     println!("--- Selectează Server Destinație ---");
     let server_b = pick_server(config, client).await?;
-    let (_sess_b, sftp_b) = establish_sftp_session(config, client, &server_b.id).await?;
+    let sess_b = establish_ssh_session(config, client, &server_b.id).await?;
+    let sftp_b = sess_b.sftp().context("Nu s-a putut inițializa SFTP pe destinație")?;
     let mut remote_path_b = remote_browser(&sftp_b, ".", true).context("Nu s-a selectat directorul destinație")?;
 
     if sftp_b.stat(&remote_path_b).map(|s| s.is_dir()).unwrap_or(false) {
@@ -269,76 +270,4 @@ async fn relay_flow(config: &Config, client: &mut bitwarden_core::Client) -> Res
 
     println!("✅ Relay finalizat cu succes.");
     Ok(())
-}
-
-async fn pick_server(config: &Config, client: &mut bitwarden_core::Client) -> Result<crate::models::BwCipher> {
-    let items = vault::fetch_filtered_items(config, client, false, false).await?;
-    
-    let mut input_data = String::new();
-    for item in &items {
-        let prefix = if item.organization_id.is_some() { "[Org]" } else { "[Personal]" };
-        let name = item.name.as_deref().unwrap_or("Unknown");
-        input_data.push_str(&format!("{} {}\n", prefix, name));
-    }
-
-    let mut builder = SkimOptionsBuilder::default();
-    builder
-        .height(Some("100%"))
-        .reverse(true)
-        .header(Some("Selectează Server"))
-        .prompt(Some("🔎 > "));
-    
-    let options = builder.build().unwrap();
-    let item_reader = SkimItemReader::default();
-    let items_stream = item_reader.of_bufread(std::io::Cursor::new(input_data));
-
-    if let Some(out) = Skim::run_with(&options, Some(items_stream)) {
-        if out.is_abort {
-            return Err(anyhow!("Selecție anulată"));
-        }
-
-        let selected_item = out.selected_items.get(0).context("Nu s-a selectat niciun server")?;
-        let selected_output = selected_item.output();
-
-        let chosen_item = items.into_iter()
-            .find(|item| {
-                let prefix = if item.organization_id.is_some() { "[Org]" } else { "[Personal]" };
-                let name = item.name.as_deref().unwrap_or("Unknown");
-                format!("{} {}", prefix, name) == selected_output
-            })
-            .context("Eroare la recuperarea item-ului")?;
-        
-        Ok(chosen_item)
-    } else {
-        Err(anyhow!("Eroare la rularea selectorului"))
-    }
-}
-
-async fn establish_sftp_session(
-    config: &Config, 
-    client: &mut bitwarden_core::Client, 
-    server_id: &str
-) -> Result<(Session, ssh2::Sftp)> {
-    // În viitor am putea lăsa user-ul să aleagă IP-ul dacă sunt mai multe. 
-    // Deocamdată luăm default (None pentru selected_ip).
-    let details = get_server_details(config, client, server_id, None).await?;
-    
-    let tcp = TcpStream::connect(format!("{}:{}", details.host, details.port))
-        .context(format!("Nu s-a putut conecta la {}:{}", details.host, details.port))?;
-    
-    let mut sess = Session::new().context("Nu s-a putut crea sesiunea SSH")?;
-    sess.set_tcp_stream(tcp);
-    sess.handshake().context("SSH handshake eșuat")?;
-    
-    if let Some(password) = details.password {
-        sess.userauth_password(&details.username, &password)
-            .context("Autentificare SSH eșuată")?;
-    } else {
-        // Încercăm agent-ul dacă nu avem parolă? Deocamdată Bitwarden ar trebui să aibă parole.
-        sess.userauth_agent(&details.username).context("Autentificare prin agent eșuată")?;
-    }
-
-    let sftp = sess.sftp().context("Nu s-a putut inițializa SFTP")?;
-    
-    Ok((sess, sftp))
 }

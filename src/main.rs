@@ -9,6 +9,7 @@ mod prompts;
 mod ssh;
 mod snippets;
 mod sftp;
+mod docker;
 
 use anyhow::{Context, Result};
 use crate::models::Config;
@@ -97,13 +98,16 @@ async fn main() -> Result<()> {
         "sftp" => {
             sftp::run_sftp_flow(&config).await?;
         },
+        "docker" | "containers" => {
+            docker::run_docker_flow(&config).await?;
+        },
         "_connect" => {
             let id = args.get(2).context("Lipsă ID item")?;
             let ip = args.get(3).cloned();
-            ssh::execute_ssh_internal(&config, id, ip).await?;
+            ssh::execute_ssh_internal(&config, id, ip, None).await?;
         },
         _ => {
-            println!("Comandă necunoscută: {}. Utilizați: list, search, ssh, snippets, sync, config, login, lock, purge, status.", command);
+            println!("Comandă necunoscută: {}. Utilizați: list, search, ssh, snippets, sync, config, login, lock, purge, status, sftp, docker.", command);
         }
     }
 

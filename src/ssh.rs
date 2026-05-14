@@ -1,10 +1,14 @@
 use std::process::Command;
 use std::os::unix::process::CommandExt;
+use std::net::TcpStream;
 use anyhow::{Result, Context, anyhow};
+use ssh2::Session;
+use crate::vault;
 use crate::vault::decrypt_string;
 use crate::models::{BwCipher, Config};
 use std::fs::OpenOptions;
 use std::io::Write;
+use skim::prelude::*;
 
 fn log_debug(msg: &str) {
     if let Ok(mut file) = OpenOptions::new()
@@ -155,7 +159,12 @@ pub fn spawn_ssh_session(item: &BwCipher, selected_uri: Option<String>) -> Resul
 }
 
 /// Execută conectarea SSH efectivă
-pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option<String>) -> Result<()> {
+pub async fn execute_ssh_internal(
+    config: &Config, 
+    id: &str, 
+    selected_ip: Option<String>,
+    remote_command: Option<&str>
+) -> Result<()> {
     let mut client = crate::auth::get_client(config).await?;
     let details = get_server_details(config, &mut client, id, selected_ip).await?;
 
@@ -163,6 +172,18 @@ pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option
 
     if let Some(password) = &details.password {
         spawn_password_injector(password);
+    }
+
+    if let Some(cmd) = remote_command {
+        println!("🚀 Conectare la {} ({} : port {}) și execuție: {}...", details.name, details.host, details.port, cmd);
+        let err = Command::new("ssh")
+            .arg("-t") // Force TTY for interactive commands
+            .arg("-p")
+            .arg(details.port.to_string())
+            .arg(format!("{}@{}", details.username, details.host))
+            .arg(cmd)
+            .exec();
+        return Err(anyhow!("Eșec la pornirea SSH cu comandă: {}", err));
     }
 
     println!("🚀 Conectare la {} ({} : port {})...", details.name, details.host, details.port);
@@ -174,6 +195,73 @@ pub async fn execute_ssh_internal(config: &Config, id: &str, selected_ip: Option
         .exec();
 
     Err(anyhow!("Eșec la pornirea SSH: {}", err))
+}
+
+pub async fn pick_server(config: &Config, client: &mut bitwarden_core::Client) -> Result<crate::models::BwCipher> {
+    let items = vault::fetch_filtered_items(config, client, false, false).await?;
+    
+    let mut input_data = String::new();
+    for item in &items {
+        let prefix = if item.organization_id.is_some() { "[Org]" } else { "[Personal]" };
+        let name = item.name.as_deref().unwrap_or("Unknown");
+        input_data.push_str(&format!("{} {}\n", prefix, name));
+    }
+
+    let mut builder = SkimOptionsBuilder::default();
+    builder
+        .height(Some("100%"))
+        .reverse(true)
+        .header(Some("Selectează Server"))
+        .prompt(Some("🔎 > "));
+    
+    let options = builder.build().unwrap();
+    let item_reader = SkimItemReader::default();
+    let items_stream = item_reader.of_bufread(std::io::Cursor::new(input_data));
+
+    if let Some(out) = Skim::run_with(&options, Some(items_stream)) {
+        if out.is_abort {
+            return Err(anyhow!("Selecție anulată"));
+        }
+
+        let selected_item = out.selected_items.get(0).context("Nu s-a selectat niciun server")?;
+        let selected_output = selected_item.output();
+
+        let chosen_item = items.into_iter()
+            .find(|item| {
+                let prefix = if item.organization_id.is_some() { "[Org]" } else { "[Personal]" };
+                let name = item.name.as_deref().unwrap_or("Unknown");
+                format!("{} {}", prefix, name) == selected_output
+            })
+            .context("Eroare la recuperarea item-ului")?;
+        
+        Ok(chosen_item)
+    } else {
+        Err(anyhow!("Eroare la rularea selectorului"))
+    }
+}
+
+pub async fn establish_ssh_session(
+    config: &Config, 
+    client: &mut bitwarden_core::Client, 
+    server_id: &str
+) -> Result<Session> {
+    let details = get_server_details(config, client, server_id, None).await?;
+    
+    let tcp = TcpStream::connect(format!("{}:{}", details.host, details.port))
+        .context(format!("Nu s-a putut conecta la {}:{}", details.host, details.port))?;
+    
+    let mut sess = Session::new().context("Nu s-a putut crea sesiunea SSH")?;
+    sess.set_tcp_stream(tcp);
+    sess.handshake().context("SSH handshake eșuat")?;
+    
+    if let Some(password) = details.password {
+        sess.userauth_password(&details.username, &password)
+            .context("Autentificare SSH eșuată")?;
+    } else {
+        sess.userauth_agent(&details.username).context("Autentificare prin agent eșuată")?;
+    }
+
+    Ok(sess)
 }
 
 pub async fn get_server_details(
